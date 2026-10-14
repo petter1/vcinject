@@ -10,7 +10,7 @@ try:
     from PySide6.QtGui import (QColor, QFont, QFontDatabase, QImage, QLinearGradient, QPainter,
                                QPainterPath, QPen, QPixmap, QPolygonF, QTransform)
     from PySide6.QtWidgets import (
-        QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QScrollArea, QFormLayout, QFrame,
+        QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame,
         QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
         QMessageBox, QPlainTextEdit,
         QPushButton, QSlider, QToolButton, QVBoxLayout, QWidget,
@@ -23,7 +23,6 @@ from PIL import Image
 
 from .. import (__version__, art, artwork, gba, registry, serve, smdh, template, tickets, tools,
                 vcbanner)
-import html
 import threading
 
 from .. import builder, forwarder, health, library, systems
@@ -484,129 +483,6 @@ class QrPanel(QFrame):
 
 # --- main window ---------------------------------------------------------------
 
-class SetupDialog(QDialog):
-    """Setup assistant and health overview: every part vcinject uses, its state
-    and a button that sets it up (again). Opens by itself on first start and
-    whenever something required is missing."""
-
-    def __init__(self, window: "MainWindow"):
-        super().__init__(window)
-        self.main = window
-        self.setWindowTitle("vcinject setup")
-        self.resize(720, 640)
-        intro = QLabel(
-            "<b>Welcome to vcinject.</b> Everything below is checked on every start; "
-            "missing or damaged parts can be set up again here at any time.<br>"
-            "<b>Required</b> for every build: the tools and the GBA base template. "
-            "Everything else is optional and unlocks more systems and the VC Console Look.",
-            wordWrap=True)
-        self.body = QWidget()
-        self.grid = QGridLayout(self.body)
-        self.grid.setColumnStretch(1, 1)
-        scroll = QScrollArea(widgetResizable=True)
-        scroll.setWidget(self.body)
-        self.log = QPlainTextEdit(readOnly=True, placeholderText="Setup log")
-        self.log.setMaximumHeight(130)
-        self.log.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
-        buttons = QDialogButtonBox(QDialogButtonBox.Close, rejected=self.accept)
-        layout = QVBoxLayout(self)
-        layout.addWidget(intro)
-        layout.addWidget(scroll, 1)
-        layout.addWidget(self.log)
-        layout.addWidget(buttons)
-        self.refresh()
-
-    def refresh(self):
-        while self.grid.count():
-            item = self.grid.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        row = 0
-
-        def section(text):
-            nonlocal row
-            label = QLabel(text, objectName="cardTitle")
-            self.grid.addWidget(label, row, 0, 1, 3)
-            row += 1
-
-        def line(check: health.Check, actions):
-            nonlocal row
-            mark = "✅" if check.ok else ("❌" if check.required else "➖")
-            self.grid.addWidget(QLabel(mark), row, 0)
-            detail = "" if check.ok else f"<br><small>{html.escape(check.detail)}</small>"
-            text = QLabel(f"{html.escape(check.label)}{detail}", wordWrap=True)
-            self.grid.addWidget(text, row, 1)
-            box = QHBoxLayout()
-            for caption, handler in actions:
-                box.addWidget(QPushButton(caption, clicked=handler))
-            holder = QWidget()
-            holder.setLayout(box)
-            self.grid.addWidget(holder, row, 2)
-            row += 1
-
-        checks = {c.resource: c for c in health.check()}
-        section("Required")
-        for name in tools.TOOLS:
-            c = checks[f"tool:{name}"]
-            line(c, [] if c.ok else [("Build tools", self.build_tools)])
-        c = checks["gba-template"]
-        line(c, [("Download", lambda: self.run(lambda log: template.download())),
-                 ("From title…", lambda: self.pick("gba-template"))])
-
-        section("VC Console Look (3D banner per console, optional)")
-        for key, system in systems.SYSTEMS.items():
-            c = checks[f"vclook:{key}"]
-            actions = [("Choose title…", lambda key=key: self.pick(f"vclook:{key}"))]
-            if key in vcbanner.DERIVED_COLORS:
-                actions.append(("Create from GBA look", lambda key=key: self.run(
-                    lambda log, key=key: vcbanner.derive_look(key))))
-            line(c, actions)
-
-        section("Emulator templates (SNES, NES, GB/GBC, Mega Drive, optional)")
-        for kind in systems.FORWARDER_KINDS:
-            line(checks[f"forwarder:{kind}"],
-                 [("Choose inject…", lambda kind=kind: self.pick(f"forwarder:{kind}"))])
-
-        section("Library")
-        folder = self.main.library.settings.value("library/folder", "")
-        ok = bool(folder) and Path(folder).is_dir()
-        line(health.Check("library", "ROM folder", ok, False, folder or "not chosen"),
-             [("Choose folder…", self._choose_library)])
-        self.grid.setRowStretch(row, 1)
-
-    def _choose_library(self):
-        self.main.library.choose_folder()
-        self.refresh()
-
-    def pick(self, resource: str):
-        path, _ = QFileDialog.getOpenFileName(self, health.question(resource), "", INJECT_FILTER)
-        if path:
-            self.run(lambda log: health.heal(resource, lambda _q: Path(path), log))
-
-    def build_tools(self):
-        if not health.can_build_tools():
-            QMessageBox.warning(self, "Tools", "Building the tools needs git, make and a C/C++ "
-                                "compiler.\nmacOS: run 'xcode-select --install' in Terminal.\n"
-                                "Linux: install build-essential and git.")
-            return
-        self.run(lambda log: health.build_tools(log))
-
-    def run(self, func):
-        self.setEnabled(False)
-
-        def done(_result, error):
-            self.setEnabled(True)
-            if error:
-                self.log.appendPlainText(f"Error: {error}")
-            else:
-                self.log.appendPlainText("Done.")
-            self.refresh()
-            self.main.refresh_status()
-            self.main._apply_artwork()
-
-        Task(self, func, done, self.log.appendPlainText)
-
-
 class LibraryPanel(QFrame):
     """ROM folder (incl. sub folders) as a clickable list with covers."""
     rom_chosen = Signal(object)          # Path
@@ -674,7 +550,7 @@ class LibraryPanel(QFrame):
         self.list.currentItemChanged.connect(lambda current, _previous: current and self._open_timer.start())
         self.list.itemClicked.connect(lambda item: self._open_current())
         self.list.itemDoubleClicked.connect(
-            lambda item: self.rom_install.emit(item.data(Qt.UserRole)))
+            lambda item: item.data(Qt.UserRole) and self.rom_install.emit(item.data(Qt.UserRole)))
         self.list.setToolTip("Click to open, double-click to build and install via QR")
         self.count = QLabel(objectName="muted")
 
@@ -864,8 +740,9 @@ class LibraryPanel(QFrame):
     def _open_current(self):
         self._open_timer.stop()
         item = self.list.currentItem()
-        if item is not None:
-            self.rom_chosen.emit(item.data(Qt.UserRole))
+        path = item.data(Qt.UserRole) if item is not None else None
+        if path is not None:  # "missing" entries from the database have no file
+            self.rom_chosen.emit(path)
 
     def select(self, path: Path):
         """Highlight a ROM opened elsewhere (e.g. dropped) without reopening it."""
@@ -1294,18 +1171,22 @@ class MainWindow(QMainWindow):
             self.load_rom(self.rom_path)
         self.refresh_status()
 
-    def open_setup(self):
-        SetupDialog(self).exec()
+    def open_setup(self, start_resource: str | None = None):
+        from .wizard import SetupWizard
+        SetupWizard(self, start_resource).exec()
         self.refresh_status()
+        self._apply_artwork()
 
     def first_run_check(self):
         """Self-healing on start: open the setup when something required is missing
         or vcinject runs for the first time."""
         settings = self.library.settings
         missing_required = [c for c in health.check() if c.required and not c.ok]
-        if missing_required or not settings.value("setup/done", False, type=bool):
+        first_run = not settings.value("setup/done", False, type=bool)
+        if missing_required or first_run:
             settings.setValue("setup/done", True)
-            self.open_setup()
+            # first start: begin at the welcome page; later: jump to what is missing
+            self.open_setup(None if first_run else missing_required[0].resource)
 
     def heal_and_retry(self, error: MissingResource):
         """A build hit a missing part: offer exactly that fix, then build again."""
