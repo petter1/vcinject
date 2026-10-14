@@ -8,6 +8,15 @@ version = "0.1.0"
 description = "3DS Virtual Console injector (NSUI alternative) for macOS and Linux"
 readme = "README.md"
 license = { text = "MIT" }
+authors = [{ name = "Yanik Fuchs" }]
+keywords = ["3ds", "virtual console", "inject", "gba", "nsui", "cia"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Environment :: X11 Applications :: Qt",
+    "Topic :: Games/Entertainment",
+]
 requires-python = ">=3.9"
 dependencies = ["Pillow>=9.0", "segno>=1.5"]
 

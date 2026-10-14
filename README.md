@@ -1,239 +1,217 @@
 # vcinject
 
-A cross-platform (macOS / Linux) alternative to **NSUI** (New Super Ultimate
-Injector) for building Nintendo 3DS Virtual Console injects. It has a CLI and a
-Qt GUI on top of the same Python core.
+**Virtual Console injects for the Nintendo 3DS – on macOS and Linux.**
 
-Currently supported:
+vcinject turns your own game backups into installable 3DS titles that look and
+behave like Nintendo's Virtual Console releases: their own HOME Menu icon, the
+rotating 3D banner with the "Virtual Console" plate, the console's jingle and
+working saves. It is an open alternative to the Windows-only
+[New Super Ultimate Injector (NSUI)](https://gbatemp.net/threads/discussion-new-super-ultimate-injector-nsui.500376/),
+with a GUI and a command line built on the same Python core.
 
-| System | Method | Status |
-|--------|--------|--------|
-| Game Boy Advance | Native GBA VC (AGB_FIRM) | ✅ |
-| Super Nintendo | snes9x_3ds forwarder | ✅ (template needed) |
-| Mega Drive / Genesis | RetroArch forwarder | ✅ (template needed) |
-| Game Boy / Color | RetroArch forwarder | ✅ (template needed) |
-| NES | VirtuaNES / RetroArch forwarder | ✅ (template needed) |
-| NES, GB/GBC (official VC emulator) | planned | – |
-| SNES (official New 3DS VC emulator) | planned | – |
+| System | How it runs | |
+| --- | --- | --- |
+| Game Boy Advance | natively on the 3DS's GBA hardware (AGB_FIRM) | ✅ |
+| Super Nintendo | snes9x_3ds forwarder | ✅ needs an emulator template |
+| Mega Drive / Genesis | RetroArch forwarder | ✅ needs an emulator template |
+| Game Boy / Color | RetroArch forwarder | ✅ needs an emulator template |
+| NES | VirtuaNES / RetroArch forwarder | ✅ needs an emulator template |
+| NES, GB/GBC with Nintendo's own VC emulator | | planned |
 
-## How it works
+## Features
 
-A GBA VC title is an ordinary 3DS application whose `ExeFS:/.code` contains the
-GBA ROM followed by a 0x360-byte `.CAA` footer (save type, save chip timings,
-LCD ghosting, color LUT). The console boots it into AGB_FIRM, which runs the
-ROM on the 3DS's built-in GBA hardware.
+- **One click from ROM to console:** build the CIA and install it over Wi-Fi by
+  scanning a QR code with FBI – no SD card shuffling.
+- **ROM library:** point it at your ROM folder (sub folders included) and pick
+  games from a list with covers; optionally list every game of a system from
+  the No-Intro database to see what your collection is missing.
+- **VC Console Look:** the official 3D banner per console – rotating cartridge
+  or handheld with your game on it, the plate with title and release year in all
+  13 console languages, the console's jingle and the bevelled VC icon frame.
+- **Artwork and metadata automatically:** box art, title screens, logos,
+  release year and publisher from the libretro databases, matched by checksum.
+- **GBA saves that work,** including 1 Mbit flash games like Pokémon
+  Ruby/Sapphire/Emerald/FireRed/LeafGreen; save types are detected
+  automatically.
+- **No title ID clashes:** a local register of every build, plus an import of
+  your console's ticket database.
+- **Setup assistant and self-healing:** everything needed is checked on every
+  start; missing or damaged parts are set up again, and a build that hits a
+  missing part asks for exactly that and retries.
 
-vcinject builds everything in Python (footer, SMDH icon, ExeFS, unencrypted
-NCCH with correct hashes) and uses two external tools:
+## What you need
 
-- **bannertool** to build the HOME Menu banner
-- **makerom** to wrap the CXI in an installable CIA
-
-The only parts taken from an official title are the **exheader** (its access
-descriptor is signed by Nintendo), the **boot logo** and an empty RomFS. They
-are not bundled with vcinject. `vcinject setup` either downloads them (pinned
-and SHA-256 verified, from [vcoven](https://github.com/vedoot/vcoven)) or
-extracts them from a decrypted GBA VC title you dumped yourself.
-
-The generated footer is byte-identical to the ones in official titles for the
-same settings (see `tests/test_gba.py`).
+- A 3DS with custom firmware ([Luma3DS](https://3ds.hacks.guide)) and
+  [FBI](https://github.com/TheRealZora/FBI-Reloaded) to install CIAs.
+  Luma's signature patches (on by default) are required, as for every inject.
+- macOS or Linux with Python 3.9+, git, make and a C/C++ compiler
+  (macOS: `xcode-select --install`; Debian/Ubuntu: `sudo apt install build-essential git python3-venv`).
+- Your own game dumps. vcinject contains **no** games, emulators, Nintendo
+  banners or keys.
 
 ## Installation
 
-Requirements: Python ≥ 3.9, git, make, and a C/C++ compiler
-(`xcode-select --install` on macOS, `build-essential` on Debian/Ubuntu).
-
 ```sh
-./scripts/build-tools.sh            # builds makerom + bannertool into ./bin
-python3 -m venv .venv
-.venv/bin/pip install -e '.[gui]'   # drop [gui] for CLI-only
-.venv/bin/vcinject setup            # or: vcinject setup --donor my_gba_vc.cia
-.venv/bin/vcinject info             # check that everything is found
+git clone https://github.com/<you>/vcinject.git
+cd vcinject
+./scripts/install.sh        # builds makerom + bannertool, creates .venv, installs vcinject
 ```
 
-## Usage
+`./scripts/install.sh --cli` skips the Qt GUI. The script only touches the
+project folder (`bin/`, `build/`, `.venv/`); user data lives in
+`~/Library/Application Support/vcinject` (macOS) or `~/.local/share/vcinject`
+(Linux).
 
-GUI: double-click `start-gui.command` in Finder, or from a terminal:
+Start the GUI with `./start-gui.command` (on macOS also by double-clicking it in
+Finder) or `.venv/bin/vcinject gui`. On the first start the **setup assistant**
+opens and walks you through the rest.
 
-```sh
-./start-gui.command          # or: .venv/bin/vcinject gui
-```
+## First-time setup
 
-Drop a ROM on the window, adjust the title, icon and banner, then click **Build CIA**.
+The assistant (GUI: **Setup…**, terminal: `vcinject doctor --fix`) shows every
+part and its state:
 
-**Library:** click **Folder…** in the left panel and choose the folder with your
-ROMs. Every supported ROM in it and its sub folders is listed with cover, system,
-sub folder, release year and whether you built it already. Search and the
-system filter narrow the list. Click a ROM to open it; double-click to build it
-and show the install QR code right away. The folder is remembered. In a
-terminal: `vcinject library <folder>`.
+| Part | Needed for | Where it comes from |
+| --- | --- | --- |
+| makerom, bannertool | everything | built by `scripts/build-tools.sh` |
+| GBA base template | GBA | downloaded (pinned, SHA-256 checked) or taken from a GBA VC title you own |
+| VC Console Look per console | the 3D banner (optional) | the banner of a VC title or inject you own, e.g. an official VC game dumped with GodMode9 or an NSUI v28+ inject |
+| Emulator template per system | SNES, NES, GB/GBC, Mega Drive | an existing emulator inject you own, e.g. made with NSUI |
+| ROM folder | the library (optional) | your folder |
 
-CLI:
+To dump one of your installed VC titles as a template: boot GodMode9 (hold
+START while powering on) → HOME → *Title manager* → `[A:] SD CARD` → the title
+→ *Build CIA (standard)*; the file appears in `gm9/out` on the SD card.
 
-```sh
-vcinject gba "Golden Sun.gba" \
-    --title "Golden Sun" --publisher "Camelot" \
-    --icon icon.png --banner banner.png \
-    -o golden_sun.cia
-```
+No Game Boy VC title at hand? **Create from GBA look** derives Game Boy and
+Game Boy Color looks (grey and dark cartridges, the Game Boy start-up sound)
+until you install an official one.
 
-| Option | Default |
-|--------|---------|
-| `--title`, `--long-title`, `--publisher` | ROM file name / same / "Virtual Console" |
-| `--icon`, `--banner` | official artwork from the libretro database (see below) |
-| `--icon-style`, `--banner-style` | best available: box art icon, logo banner |
-| `--offline` | skip the online lookup, generate artwork from the title |
-| `--title-id` | derived from the ROM hash (`00040000 0F0xxxx00`), see [Title IDs](#title-ids) |
-| `--product-code` | `CTR-N-<game code>` |
-| `--save-type` | auto-detected from the SDK save library string (`vcinject save-types` lists all values) |
-| `--ghosting` | `0x80` (lower = more LCD ghosting, `0xFF` = none) |
-| `--brightness` | `1.0` = full brightness (official titles use `0.7`, which looks darker) |
+## Using the GUI
 
-### Title IDs
+1. Choose your ROM folder in the **Library** (or drop a ROM on the window).
+   Arrow keys browse; the preview shows the HOME Menu icon and the rotating
+   banner as they will appear.
+2. Adjust title, publisher, release year or artwork if you like. **Advanced**
+   holds the title ID, save type, plate language, LCD ghosting and brightness.
+3. **Install via QR** builds the CIA and shows a QR code (click it to enlarge).
+   On the 3DS: **FBI → Remote Install → Scan QR Code**. Double-clicking a game
+   in the library does all of this in one go.
 
-Each inject gets a title ID `00040000 0FxxxxNN` with a unique ID in
-`0xF0000`–`0xF7FFF`, a range official titles don't use. vcinject keeps a local
-register of every build (`registry.json` in the data directory):
+**Show missing games** in the library lists every game of the system from the
+No-Intro database below your ROMs, with a region filter and an
+"owned X of Y" count.
 
-- Rebuilding the same ROM reuses its ID, so installing updates the existing title and keeps its save.
-- A different ROM never gets an ID that is already registered. If its preferred ID is taken, the next free one is used.
-- Choosing an ID that belongs to another ROM with `--title-id` prints a warning.
-
-```sh
-vcinject list                       # all injects with ID, save type and build date
-vcinject forget 000400000F6B2B00    # free an ID after deleting the title on the 3DS
-```
-
-### Artwork
-
-Icons and banners come from the [libretro thumbnail database](https://thumbnails.libretro.com),
-which has box art, title screens, screenshots and logos for nearly every
-release. The ROM is matched against the No-Intro DAT from
-[libretro-database](https://github.com/libretro/libretro-database), by CRC32
-first, then by cartridge serial (hacks and translations), then by file name.
-No API key is needed. Downloads are cached in the vcinject data directory, so
-later builds work offline.
-
-| Style | Icon | Banner |
-|-------|------|--------|
-| `boxart-full` | whole box (default) | – |
-| `boxart` | cover illustration, without the GBA side stripe and rating bar | whole box on a blurred backdrop |
-| `logo` | game logo on a blurred backdrop | game logo on a blurred backdrop |
-| `title` | title screen | framed title screen |
-| `generated` | initials | title text |
-
-If no match is found, generated art is used. `--icon`/`--banner` or
-"Custom image…" in the GUI override any style.
-
-### Other systems (emulator forwarders)
-
-SNES, NES, Game Boy / Color and Mega Drive games run in a homebrew emulator
-(snes9x_3ds, VirtuaNES or RetroArch) that is packed into the CIA together with
-the ROM. vcinject doesn't ship any emulator: it reuses one inject per system
-that you already have, e.g. made with NSUI, as template. Only the ROM, the
-title ID and the save folder name are swapped, so the result is identical to
-what NSUI builds.
+## Command line
 
 ```sh
-vcinject setup --forwarder-donor "Super Metroid.cia" "Sonic.cia" "Mario Land.cia" "SMB.cia"
-vcinject build "Mega Man X.sfc" --qr      # any supported ROM type
+vcinject build "Golden Sun.gba" --qr        # any supported ROM; build and install via QR
+vcinject build "Mega Man X.sfc" -o mmx.cia  # just build
+vcinject library ~/ROMs                     # list a ROM folder
+vcinject doctor --fix                       # check and repair the setup
+vcinject setup --banner-donor vc_title.cia  # install a VC Console Look
+vcinject setup --forwarder-donor inject.cia # install an emulator template
+vcinject import-tickets ticket.db           # reserve title IDs used on your 3DS
+vcinject list                               # everything built so far
+vcinject serve a.cia b.cia                  # serve existing CIAs via QR
 ```
 
-The system is detected from each template and from the ROM's extension
-(`.sfc .smc .nes .gb .gbc .md .gen .smd`). Saves of forwarders live on the SD
-card in `nsui_formwarders_data/<system>_<id>_<title>/`.
+Useful `build` options: `--title`, `--publisher`, `--released`,
+`--icon`/`--banner` (own images), `--icon-style`/`--banner-style`,
+`--save-type`, `--title-id`, `--ghosting`, `--brightness`, `--plate-lang`,
+`--offline`. Run `vcinject build --help` for all of them.
 
-### VC Console Look (3D banner per console)
+## Saves
 
-Virtual Console titles show a 3D model of the console's cartridge (or the
-handheld) on the HOME Menu, with the game on it, the "Virtual Console" plate
-(title + "Released: YEAR") below and the console's jingle. vcinject builds
-this look for every console you have a template for. Each template is the
-banner of a VC title or inject you own; the models aren't bundled.
+- **GBA:** AGB_FIRM writes the save when you leave the game with **HOME → A**;
+  on the next normal boot the 3DS copies it to the SD card, where Checkpoint can
+  back it up. Exit games that way, not by holding POWER.
+- **Emulator forwarders:** saves live on the SD card in
+  `nsui_formwarders_data/<system>_<id>_<title>/` (compatible with NSUI injects).
+- Rebuilding a game keeps its title ID, so installing the new CIA updates the
+  title and keeps the save.
 
-```sh
-vcinject setup --banner-donor "Pokémon FireRed (NSUI).cia" "Yoshi (official NES VC).cia"
-```
+If a GBA game doesn't save, set its save type by hand under **Advanced**. The
+GBA real-time clock is reported not to run under AGB_FIRM.
 
-The console is detected from each title (`--banner-system` if it can't be).
-Once a console has a look, its builds use it by default
-(`--banner-style gba3d`): the title screen goes onto the model, and the plate
-is written in every console language (`--released 2004` overrides the year).
-Banners made for one region get plates for all other languages too, so they
-show up on every console. The icon gets the bevelled VC frame
-(`--no-icon-frame` to disable).
+## Avoiding title IDs already on your 3DS
 
-No Game Boy template yet? `vcinject setup --derive-looks` (GUI: the button in
-the artwork card) creates Game Boy and Game Boy Color looks from the GBA look:
-grey (GB) and dark (GBC) cartridges, the game pillarboxed in its native 10:9
-aspect, and the Game Boy start-up "ping" as jingle. Installing an official GB
-VC title as template later replaces them.
+vcinject never reuses a title ID of something it built. To also respect titles
+from other sources, import your console's ticket database: in GodMode9 copy
+`[1:] SYSNAND CTRNAND/dbs/ticket.db` to `[0:] SDCARD/gm9/out`, move it to your
+computer and use **Import tickets…** (or `vcinject import-tickets ticket.db`).
 
-Known template layouts: the picture in a rounded frame on a transparent
-texture (newer NSUI GBA banners), in a box of an otherwise black texture
-(official Nintendo VC), or covering the whole texture (NSUI v28).
+## Troubleshooting
 
-### Avoiding title IDs already on your 3DS
+| Problem | Try |
+| --- | --- |
+| Something is missing or a template seems broken | `vcinject doctor --fix` or **Setup…**; damaged files are moved aside as `*.broken-<time>` and can be set up again |
+| The 3DS can't download via QR | same Wi-Fi? allow incoming connections in the macOS firewall; set `--host`/`--port` |
+| A GBA game doesn't save | set the save type under **Advanced**, rebuild, reinstall |
+| A GBA game always starts with "New Game" after a vcinject update | delete the title and its ticket in FBI, then reinstall |
+| Install fails with `0xC8E083FC` ("already exists") | delete the old title and ticket in FBI first, or use another title ID |
 
-Import the console's ticket database so that new injects never reuse a title
-ID of something installed, including injects from other tools:
+## How it works
 
-1. Boot GodMode9 (hold START while powering on).
-2. `[1:] SYSNAND CTRNAND` → `dbs` → select `ticket.db`, press Y to copy.
-3. Go to `[0:] SDCARD` → `gm9` → `out`, press Y to paste.
-4. Copy `gm9/out/ticket.db` to your computer and run
-   `vcinject import-tickets ticket.db` (GUI: **Import tickets…**).
+A GBA VC title is an ordinary 3DS application whose `ExeFS:/.code` holds the
+GBA ROM followed by a 0x360-byte `.CAA` footer (save type, save chip timings,
+LCD ghosting, colour LUT); the console boots it into AGB_FIRM. vcinject builds
+the footer, SMDH icon, ExeFS, RomFS and the unencrypted NCCH with all hashes in
+Python. Only the GBA exheader (whose access descriptor Nintendo signed), the
+boot logo and an empty RomFS come from an official title. The SD save size is
+set per save type (two slots of 0x200 + save size; 0x40400 for 1 Mbit flash),
+matching NSUI. The generated footers are byte-identical to official ones.
 
-GodMode9 only reads the NAND here, so it won't ask for write permission.
-Tickets of deleted titles may still be in the file; those IDs are simply
-skipped as well.
+Emulator forwarders keep the emulator of the template inject and swap the ROM,
+the title ID and the save folder name in the RomFS; rebuilding NSUI injects
+this way reproduces them byte for byte.
 
-### Install via QR code
+The VC Console Look edits textures inside the template banner (CBMD/CGFX,
+LZ11, PICA200 texture formats including ETC1): the game picture is placed into
+the model's screen area – a frame, a box or a device display, detected
+automatically – and the "Virtual Console" plate is redrawn per language.
 
-Instead of copying the CIA to the SD card, let FBI download it over Wi-Fi:
-
-```sh
-vcinject gba game.gba --qr           # build, then serve + show QR code
-vcinject serve a.cia b.cia           # serve existing CIAs (one QR code for all)
-```
-
-In the GUI, click **Install via QR**: it builds the CIA with the current
-settings and shows the QR code right in the window, together with the
-download status. **Stop** (or closing the window) ends the server.
-On the 3DS open **FBI → Remote Install → Scan QR Code** and scan the code.
-The 3DS and the computer must be on the same network. The server runs until
-you press Ctrl+C or close the dialog. On macOS, allow incoming connections if
-the firewall asks. Use `--host`/`--port` if the auto-detected address is wrong.
-
-Install the CIA with FBI on a console running Luma3DS. As with every inject,
-the NCCH header signature can't be valid, so this relies on Luma's signature
-patches (on by default).
-
-## Save games
-
-AGB_FIRM writes the save to NAND when you leave the game. On the next boot the
-system copies it to the SD card as the title's save data, where Checkpoint or
-GodMode9 can back it up. The real-time clock is reported not to work under
-the official AGB_FIRM, so time-based events (e.g. berries in Pokémon
-Ruby/Sapphire/Emerald) may not advance.
-
-If a game doesn't save, override the auto-detection with `--save-type`.
-Repro-cart hacks in particular can carry misleading SDK strings.
+`makerom` ([Project_CTR](https://github.com/3DSGuy/Project_CTR)) wraps the
+result into a CIA, `bannertool` ([3ds-bannertool](https://github.com/carstene1ns/3ds-bannertool))
+builds flat banners.
 
 ## Development
 
 ```sh
-.venv/bin/pip install -e '.[gui,dev]'
+.venv/bin/python -m pip install -e '.[gui,dev]'
 .venv/bin/pytest
 ```
 
-Layout: `gba.py` (ROM parsing, save detection, footer), `smdh.py`, `ncch.py`
-(ExeFS/NCCH/CIA parsing), `art.py`, `template.py`, `builder.py` (pipeline),
-`cli.py`, `gui/app.py`.
+| Module | |
+| --- | --- |
+| `gba.py` | GBA ROM parsing, save detection, footer |
+| `ncch.py`, `romfs.py`, `smdh.py`, `cgfx.py` | 3DS container and banner formats |
+| `vcbanner.py` | VC Console Look |
+| `forwarder.py` | emulator forwarders |
+| `artwork.py`, `library.py` | databases, artwork, ROM library |
+| `registry.py`, `tickets.py` | title IDs |
+| `health.py` | setup checks and self-healing |
+| `builder.py` | build pipeline |
+| `cli.py`, `gui/app.py` | front ends |
 
-## References
+A hardware test plan is in [docs/TESTPLAN.md](docs/TESTPLAN.md).
 
-- [3dbrew: 3DS Virtual Console](https://www.3dbrew.org/wiki/3DS_Virtual_Console) (footer format, save types)
-- [libn3ds / open_agb_firm](https://github.com/profi200/open_agb_firm) (save chip timings, save detection heuristics)
-- [vcoven](https://github.com/vedoot/vcoven) (template, NCCH gotchas)
-- [Project_CTR](https://github.com/3DSGuy/Project_CTR), [bannertool](https://github.com/carstene1ns/3ds-bannertool)
+## Credits
+
+- [3dbrew](https://www.3dbrew.org) – file format documentation
+- [open_agb_firm / libn3ds](https://github.com/profi200/open_agb_firm) – save chip timings and detection
+- [vcoven](https://github.com/vedoot/vcoven) – GBA template and NCCH notes
+- [NSUI Banner Fixer](https://github.com/pivotiiii/nsui_banner_fixer) – banner plate languages
+- [libretro-database](https://github.com/libretro/libretro-database) and
+  [libretro thumbnails](https://thumbnails.libretro.com) – game data and artwork
+- [Project_CTR](https://github.com/3DSGuy/Project_CTR), [3ds-bannertool](https://github.com/carstene1ns/3ds-bannertool)
+
+## Legal
+
+vcinject is not affiliated with Nintendo. It ships no games, emulators,
+firmware, keys or Nintendo artwork; templates are taken from titles you own.
+Only use it with games you own.
+
+## License
+
+[MIT](LICENSE)
