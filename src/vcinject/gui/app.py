@@ -449,7 +449,7 @@ class QrPanel(QFrame):
         self.bar.setVisible(False)
         self.transfer = QLabel(objectName="muted")
         self.transfer.setVisible(False)
-        stop = QPushButton("Stop", objectName="secondary", clicked=self.stop)
+        self.stop_button = QPushButton("Stop", objectName="secondary", clicked=self.stop)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 14)
         layout.addWidget(self.title)
@@ -459,7 +459,7 @@ class QrPanel(QFrame):
         layout.addWidget(self.state)
         layout.addWidget(self.bar)
         layout.addWidget(self.transfer)
-        layout.addWidget(stop, alignment=Qt.AlignLeft)
+        layout.addWidget(self.stop_button, alignment=Qt.AlignLeft)
         self.status.connect(self.state.setText)
         self.progress.connect(self._show_progress)
         self.hide()
@@ -485,6 +485,7 @@ class QrPanel(QFrame):
         self.bar.setVisible(False)
         self.transfer.setVisible(False)
         self._started = None
+        self._set_done(False)
         image = QImage.fromData(self.server.qr_png(scale=10))
         self.qr.setPixmap(QPixmap.fromImage(image).scaled(QR_SIZE, QR_SIZE, Qt.KeepAspectRatio,
                                                           Qt.SmoothTransformation))
@@ -513,6 +514,14 @@ class QrPanel(QFrame):
         if sent >= total:
             text = f"✓ {total / mib:.1f} MiB sent – FBI finishes the installation on the 3DS"
         self.transfer.setText(text)
+        self._set_done(sent >= total)  # the 3DS may ask again (e.g. a retry): back to Stop
+
+    def _set_done(self, done: bool):
+        """Stop while the CIA is offered or sent; Done once the 3DS has all of it."""
+        self.stop_button.setText("Done" if done else "Stop")
+        self.stop_button.setObjectName("primary" if done else "secondary")
+        self.stop_button.style().unpolish(self.stop_button)
+        self.stop_button.style().polish(self.stop_button)
 
     def zoom(self):
         if self.server is None:

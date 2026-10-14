@@ -222,3 +222,21 @@ def test_rescan_keeps_covers_on_screen(tmp_path, monkeypatch):
     panel.load(roms)  # Rescan: the new scan starts with what was known
     assert panel.roms[0].cover is not None and panel.roms[0].release == "Game (Europe)"
     panel.stop()
+
+
+def test_qr_panel_button_turns_into_done(tmp_path, monkeypatch):
+    monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path / "data"))
+    from vcinject.gui import app as gui
+
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    cia = tmp_path / "game.cia"
+    cia.write_bytes(b"\0" * 1024)
+    panel = gui.QrPanel()
+    panel.start(cia)
+    assert panel.stop_button.text() == "Stop"
+    panel._show_progress(512, 1024)
+    assert panel.stop_button.text() == "Stop"
+    panel._show_progress(1024, 1024)
+    assert panel.stop_button.text() == "Done"
+    panel.stop_button.click()  # Done stops serving and closes the panel
+    assert panel.server is None
