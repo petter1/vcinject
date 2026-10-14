@@ -511,6 +511,14 @@ def crc32(path: Path) -> str:
 
 # --- zipping: one ROM per .zip, as No-Intro sets are usually shared -----------------
 
+def take_over(old: LibraryRom, new: LibraryRom) -> None:
+    """Copy what was found out about a file to a new scan of it."""
+    for name in ("release", "year", "cover", "sha1", "built", "method", "family", "crc", "serial",
+                 "dump_sha1", "dump_size", "header_sha1", "verified", "verified_by",
+                 "text_checked"):
+        setattr(new, name, getattr(old, name))
+
+
 def unzipped(roms: list[LibraryRom]) -> list[LibraryRom]:
     return [r for r in roms if not systems.is_zip(r.path)]
 

@@ -203,3 +203,22 @@ def test_red_only_without_any_verified_version(tmp_path, monkeypatch):
     panel._refresh()
     states = {e.title: e.dump_state for e in panel._entries}
     assert states == {"Game": "", "Other": "bad"}  # Game has a verified German version
+
+
+def test_rescan_keeps_covers_on_screen(tmp_path, monkeypatch):
+    monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path / "data"))
+    from PIL import Image
+    from vcinject.gui import libraryview
+
+    roms = tmp_path / "roms"
+    roms.mkdir()
+    (roms / "Game (Europe).gba").write_bytes(b"\0" * 0x200)
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    panel = libraryview.LibraryPanel(autoload=False)
+    panel.load(roms)
+    panel.stop()
+    panel.roms[0].cover = Image.new("RGB", (8, 8), "red")
+    panel.roms[0].release = "Game (Europe)"
+    panel.load(roms)  # Rescan: the new scan starts with what was known
+    assert panel.roms[0].cover is not None and panel.roms[0].release == "Game (Europe)"
+    panel.stop()

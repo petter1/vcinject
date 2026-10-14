@@ -569,6 +569,7 @@ class LibraryPanel(QFrame):
              "folder": "Sort: Folder"}
     VIEWS = {"grid": "Grid", "details": "Details", "coverflow": "Cover Flow"}
     COMPILATIONS = "\x00compilations"  # series filter entry for multi-game cartridges
+    MISSING_COVERS_KEPT = 600  # covers of missing games held in memory (~200 KB each)
 
     _panels: "weakref.WeakSet[LibraryPanel]" = weakref.WeakSet()  # main window + library window
 
@@ -820,15 +821,25 @@ class LibraryPanel(QFrame):
         self._generation += 1
         generation = self._generation
         try:
-            self.roms = library.scan(folder)
+            roms = library.scan(folder)
         except InjectError as exc:
             QMessageBox.warning(self, "Library", str(exc))
             return
+        # a rescan keeps what is known about unchanged files (covers stay on screen);
+        # the background pass below checks them again
+        previous = {rom.path: rom for rom in self.roms}
+        for rom in roms:
+            old = previous.get(rom.path)
+            if old is not None and old.size == rom.size:
+                library.take_over(old, rom)
+        same_folder = self.folder_label.text() == str(folder)
+        self.roms = roms
         self.folder_label.setText(str(folder))
         self._rows = {rom.path: i for i, rom in enumerate(self.roms)}
-        self._catalog, self._missing = [], []
+        if not same_folder:  # the old folder's collection does not apply
+            self._catalog, self._missing = [], []
+            self._icons = {}
         self._group_notes = {}
-        self._icons = {}
         self._refresh()
         if self.show_missing.isChecked():
             self._catalog_timer.start()
@@ -1564,8 +1575,8 @@ class LibraryPanel(QFrame):
         self._catalog_generation += 1
         generation = self._catalog_generation
         self._catalog, self._missing = [], []
-        self._missing_covers = {}
-        self._cover_requested = set()
+        # covers of missing games stay: they are keyed by game and still right
+        self._cover_requested = set(self._missing_covers)
         if not self.show_missing.isChecked():
             self._refresh()
             return
@@ -1626,6 +1637,10 @@ class LibraryPanel(QFrame):
             return
         self._missing_covers[key] = cover
         self._forget_icons(key)
+        while len(self._missing_covers) > self.MISSING_COVERS_KEPT:  # oldest first; on disk anyway
+            dropped = next(iter(self._missing_covers))
+            del self._missing_covers[dropped]
+            self._cover_requested.discard(dropped)
         self._schedule()
 
     def _style_missing(self, cover: Image.Image) -> Image.Image:
