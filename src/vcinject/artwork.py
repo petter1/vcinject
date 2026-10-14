@@ -24,9 +24,9 @@ from . import art
 from .errors import InjectError
 from .template import data_dir
 
-SYSTEM = "Nintendo - Game Boy Advance"
+SYSTEM = "Nintendo - Game Boy Advance"  # default; see systems.SYSTEMS[...].database
 _DAT_URL = ("https://raw.githubusercontent.com/libretro/libretro-database/master/"
-            "metadat/no-intro/" + urllib.parse.quote(SYSTEM) + ".dat")
+            "metadat/no-intro/{system}.dat")
 _THUMB_URL = "https://thumbnails.libretro.com/{system}/{kind}/{name}.png"
 _DAT_MAX_AGE = 30 * 24 * 3600
 _TIMEOUT = 20
@@ -83,6 +83,9 @@ def _download(url: str) -> bytes | None:
         raise InjectError(f"Could not reach the artwork server: {exc}") from exc
 
 
+_DB_CACHE: dict[str, "ReleaseDatabase"] = {}
+
+
 class ReleaseDatabase:
     def __init__(self, text: str):
         self.by_crc: dict[str, str] = {}
@@ -110,12 +113,14 @@ class ReleaseDatabase:
         return own + others
 
     @classmethod
-    def load(cls, refresh: bool = False) -> "ReleaseDatabase":
-        path = _cache_dir() / f"{SYSTEM}.dat"
+    def load(cls, refresh: bool = False, system: str = SYSTEM) -> "ReleaseDatabase":
+        if not refresh and system in _DB_CACHE:
+            return _DB_CACHE[system]
+        path = _cache_dir() / f"{system}.dat"
         fresh = path.is_file() and time.time() - path.stat().st_mtime < _DAT_MAX_AGE
         if refresh or not fresh:
             try:
-                data = _download(_DAT_URL)
+                data = _download(_DAT_URL.format(system=urllib.parse.quote(system)))
             except InjectError:
                 if not path.is_file():
                     raise
@@ -123,7 +128,9 @@ class ReleaseDatabase:
             if data:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(data)
-        return cls(path.read_text(encoding="utf-8", errors="replace"))
+        db = cls(path.read_text(encoding="utf-8", errors="replace"))
+        _DB_CACHE[system] = db
+        return db
 
     def identify(self, rom: bytes, game_code: str = "", filename: str = "") -> Match | None:
         crc = f"{zlib.crc32(rom) & 0xFFFFFFFF:08X}"
@@ -164,21 +171,22 @@ def _normalize(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", name.lower())
 
 
-def thumbnail_url(name: str, kind: str) -> str:
-    return _THUMB_URL.format(system=urllib.parse.quote(SYSTEM),
+def thumbnail_url(name: str, kind: str, system: str = SYSTEM) -> str:
+    return _THUMB_URL.format(system=urllib.parse.quote(system),
                              kind=KINDS[kind],
                              name=urllib.parse.quote(_THUMB_UNSAFE.sub("_", name)))
 
 
-def fetch_image(name: str, kind: str) -> Image.Image | None:
-    cache = _cache_dir() / KINDS[kind] / f"{_THUMB_UNSAFE.sub('_', name)}.png"
+def fetch_image(name: str, kind: str, system: str = SYSTEM) -> Image.Image | None:
+    folder = _cache_dir() if system == SYSTEM else _cache_dir() / system
+    cache = folder / KINDS[kind] / f"{_THUMB_UNSAFE.sub('_', name)}.png"
     missing = cache.with_suffix(".missing")
     if cache.is_file():
         data = cache.read_bytes()
     elif missing.is_file() and time.time() - missing.stat().st_mtime < _DAT_MAX_AGE:
         return None
     else:
-        data = _download(thumbnail_url(name, kind))
+        data = _download(thumbnail_url(name, kind, system))
         cache.parent.mkdir(parents=True, exist_ok=True)
         if data is None:
             missing.touch()
@@ -193,35 +201,36 @@ def fetch_image(name: str, kind: str) -> Image.Image | None:
 
 
 def lookup(rom: bytes, game_code: str = "", filename: str = "",
-           kinds: tuple[str, ...] = tuple(KINDS)) -> Artwork:
+           kinds: tuple[str, ...] = tuple(KINDS), system: str = SYSTEM) -> Artwork:
     """Identify the ROM and download all available artwork for it."""
-    db = ReleaseDatabase.load()
+    db = ReleaseDatabase.load(system=system)
     match = db.identify(rom, game_code, filename)
     if match is None:
         return Artwork()
     images = {}
     for kind in kinds:
-        image = fetch_image(match.name, kind)
+        image = fetch_image(match.name, kind, system)
         if image is not None:
             images[kind] = image
     crcs = db.sibling_crcs(match.name)
-    return Artwork(match, images, year=_metadata("releaseyear", crcs),
-                   publisher=_metadata("publisher", crcs))
+    return Artwork(match, images, year=_metadata("releaseyear", crcs, system),
+                   publisher=_metadata("publisher", crcs, system))
 
 
 _META_RE = re.compile(r'game \((?P<body>.*?)\n\)', re.S)
-_META_CACHE: dict[str, dict[str, str]] = {}
+_META_CACHE: dict[tuple[str, str], dict[str, str]] = {}
 
 
-def _metadata(field_name: str, crcs: list[str]) -> str | None:
+def _metadata(field_name: str, crcs: list[str], system: str = SYSTEM) -> str | None:
     """First value of a libretro-database metadat field for any of ``crcs``."""
-    table = _META_CACHE.get(field_name)
+    table = _META_CACHE.get((system, field_name))
     if table is None:
-        path = _cache_dir() / "metadat" / f"{field_name}.dat"
+        folder = _cache_dir() / "metadat" if system == SYSTEM else _cache_dir() / "metadat" / system
+        path = folder / f"{field_name}.dat"
         fresh = path.is_file() and time.time() - path.stat().st_mtime < _DAT_MAX_AGE
         if not fresh:
             url = (f"https://raw.githubusercontent.com/libretro/libretro-database/master/"
-                   f"metadat/{field_name}/{urllib.parse.quote(SYSTEM)}.dat")
+                   f"metadat/{field_name}/{urllib.parse.quote(system)}.dat")
             try:
                 data = _download(url)
             except InjectError:
@@ -238,7 +247,7 @@ def _metadata(field_name: str, crcs: list[str]) -> str | None:
                 if value:
                     for crc in _CRC_RE.findall(body):
                         table.setdefault(crc.upper(), value.group(1))
-        _META_CACHE[field_name] = table
+        _META_CACHE[(system, field_name)] = table
     return next((table[crc] for crc in crcs if crc in table), None)
 
 

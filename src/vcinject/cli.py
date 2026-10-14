@@ -6,8 +6,9 @@ import sys
 import time
 from pathlib import Path
 
-from . import __version__, artwork, gba, registry, serve, template, tickets, tools, vcbanner
-from .builder import GbaInjectOptions, build_gba, parse_title_id
+from . import (__version__, artwork, forwarder, gba, registry, serve, systems, template, tickets,
+               tools, vcbanner)
+from .builder import GbaInjectOptions, build, parse_title_id
 from .errors import InjectError
 
 
@@ -41,8 +42,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    g = sub.add_parser("gba", help="inject a GBA ROM into a GBA VC (AGB_FIRM) CIA")
-    g.add_argument("rom", type=Path, help=".gba ROM file")
+    g = sub.add_parser("build", aliases=["gba"],
+                       help="build a CIA from a ROM (GBA natively; SNES, NES, GB/GBC and "
+                            "Mega Drive through an emulator forwarder template)")
+    g.add_argument("rom", type=Path, help="ROM file (.gba .sfc .smc .nes .gb .gbc .md .gen .smd)")
     g.add_argument("-o", "--output", type=Path, help="output .cia (default: next to the ROM)")
     g.add_argument("-t", "--title", help="short title shown on the HOME Menu (default: ROM file name)")
     g.add_argument("--long-title", help="long title (default: same as --title)")
@@ -88,6 +91,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--banner-donor", type=Path,
                    help="use the 3D GBA banner of one of your GBA VC injects (.cia/.cxi/"
                         "banner.bin, e.g. made with NSUI v28) for the VC Console Look")
+    s.add_argument("--forwarder-donor", type=Path, nargs="+", metavar="INJECT",
+                   help="use existing emulator injects (RetroArch / snes9x / VirtuaNES, e.g. "
+                        "made with NSUI) as templates for SNES, NES, GB/GBC and Mega Drive")
 
     sub.add_parser("list", help="list all injects built so far with their title IDs")
     t = sub.add_parser("import-tickets",
@@ -111,10 +117,10 @@ def cmd_gba(args: argparse.Namespace) -> int:
         online_artwork=not args.offline, icon_style=args.icon_style,
         banner_style=args.banner_style, icon_frame=not args.no_icon_frame,
         release_year=args.released, plate_language=args.plate_lang, keep_cxi=args.keep_cxi)
-    if not template.is_installed():
+    if systems.for_rom(args.rom).key == "gba" and not template.is_installed():
         print("No GBA VC template installed yet, downloading it once...")
         template.download()
-    result = build_gba(options)
+    result = build(options)
     if args.qr:
         return _serve([result.output_path], args.host, args.port)
     return 0
@@ -142,11 +148,15 @@ def _serve(files: list[Path], host: str | None, port: int) -> int:
 
 
 def cmd_setup(args: argparse.Namespace) -> int:
+    if args.forwarder_donor:
+        for donor in args.forwarder_donor:
+            t = forwarder.install_from(donor)
+            print(f"{systems.FORWARDER_KINDS[t.kind]} template installed from {donor.name}")
     if args.banner_donor:
         path = vcbanner.install_from(args.banner_donor)
         print(f"VC Console Look installed: {path}")
-        if not args.donor:
-            return 0
+    if (args.banner_donor or args.forwarder_donor) and not args.donor:
+        return 0
     if args.donor:
         template.from_donor(args.donor)
         print(f"Template extracted from {args.donor}")
@@ -167,6 +177,10 @@ def cmd_info(_args: argparse.Namespace) -> int:
     ok &= installed
     print(f"{'template':12} {template.template_dir() if installed else 'MISSING (run vcinject setup)'}")
     print(f"{'VC look':12} {vcbanner.template_path() if vcbanner.is_installed() else 'not installed (optional: vcinject setup --banner-donor <inject.cia>)'}")
+    installed = forwarder.installed_kinds()
+    for kind, label in systems.FORWARDER_KINDS.items():
+        state = "installed" if kind in installed else "not set up (vcinject setup --forwarder-donor <inject.cia>)"
+        print(f"{kind:12} {label}: {state}")
     return 0 if ok else 1
 
 
@@ -214,7 +228,7 @@ def cmd_gui(_args: argparse.Namespace) -> int:
     return gui_main()
 
 
-COMMANDS = {"gba": cmd_gba, "serve": cmd_serve, "setup": cmd_setup,
+COMMANDS = {"gba": cmd_gba, "build": cmd_gba, "serve": cmd_serve, "setup": cmd_setup,
             "list": cmd_list, "forget": cmd_forget, "import-tickets": cmd_import_tickets, "info": cmd_info,
             "save-types": cmd_save_types, "gui": cmd_gui}
 

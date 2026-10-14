@@ -91,8 +91,12 @@ def build_ncch(*, title_id: int, product_code: str, exheader: bytes, exefs: byte
     struct.pack_into("<III", hdr, 0x1A0, exefs_offset // MEDIA_UNIT, len(exefs) // MEDIA_UNIT, 1)
     hdr[0x1C0:0x1E0] = hashlib.sha256(exefs[:MEDIA_UNIT]).digest()
     if romfs:
-        struct.pack_into("<III", hdr, 0x1B0, romfs_offset // MEDIA_UNIT, len(romfs) // MEDIA_UNIT, 1)
-        hdr[0x1E0:0x200] = hashlib.sha256(romfs[:MEDIA_UNIT]).digest()
+        # The header hash covers the IVFC header and master hash.
+        master_size = struct.unpack_from("<I", romfs, 0x08)[0] if romfs[:4] == b"IVFC" else 0
+        hash_region = _align(0x60 + master_size, MEDIA_UNIT)
+        struct.pack_into("<III", hdr, 0x1B0, romfs_offset // MEDIA_UNIT, len(romfs) // MEDIA_UNIT,
+                         hash_region // MEDIA_UNIT)
+        hdr[0x1E0:0x200] = hashlib.sha256(romfs[:hash_region]).digest()
 
     out = bytearray(total)
     out[0:MEDIA_UNIT] = hdr

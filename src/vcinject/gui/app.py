@@ -22,11 +22,12 @@ from PIL import Image
 
 from .. import (__version__, art, artwork, gba, registry, serve, smdh, template, tickets, tools,
                 vcbanner)
-from ..builder import (GBA_3D, GbaInjectOptions, build_gba, default_product_code,
+from .. import builder, forwarder, systems
+from ..builder import (GBA_3D, GbaInjectOptions, default_product_code,
                        default_title_id, parse_title_id)
 from ..errors import InjectError
 
-ROM_FILTER = "GBA ROMs (*.gba *.agb *.bin);;All files (*)"
+ROM_FILTER = systems.rom_filter()
 IMAGE_FILTER = "Images (*.png *.jpg *.jpeg *.bmp *.gif *.webp);;All files (*)"
 CUSTOM = "custom"
 QR_SIZE = 360
@@ -140,7 +141,8 @@ class RomDropZone(QFrame):
         self.setMinimumHeight(118)
         self.cover = QLabel(alignment=Qt.AlignCenter)
         self.cover.setFixedSize(92, 92)
-        self.headline = QLabel("Drop a GBA ROM here", objectName="dropHint")
+        self.headline = QLabel("Drop a ROM here (GBA, SNES, NES, GB/GBC, Mega Drive)",
+                               objectName="dropHint")
         self.headline.setWordWrap(True)
         self.details = QLabel("or click to browse", objectName="muted")
         self.details.setWordWrap(True)
@@ -158,7 +160,7 @@ class RomDropZone(QFrame):
         layout.addLayout(text, 1)
         self.set_cover(None)
 
-    def set_cover(self, image: Image.Image | None):
+    def set_cover(self, image: Image.Image | None, label: str = "ROM"):
         if image is None:
             pix = QPixmap(92, 92)
             pix.fill(Qt.transparent)
@@ -168,7 +170,7 @@ class RomDropZone(QFrame):
             p.drawRoundedRect(QRectF(2, 2, 88, 88), 10, 10)
             p.setPen(self.palette().mid().color())
             p.setFont(QFont(p.font().family(), 11, QFont.Bold))
-            p.drawText(pix.rect(), Qt.AlignCenter, "GBA")
+            p.drawText(pix.rect(), Qt.AlignCenter, label)
             p.end()
             self.cover.setPixmap(pix)
         else:
@@ -445,9 +447,10 @@ class QrPanel(QFrame):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("vcinject — GBA Virtual Console Injector")
+        self.setWindowTitle("vcinject — Virtual Console Injector")
         self.setAcceptDrops(True)
-        self.rom: gba.GbaRom | None = None
+        self.rom = None
+        self.system = systems.SYSTEMS["gba"]
         self.rom_path: Path | None = None
         self.found = artwork.Artwork()
         self.icon_image: Image.Image | None = None
@@ -492,11 +495,9 @@ class MainWindow(QMainWindow):
         art_layout.addWidget(self.icon_picker)
         art_layout.addWidget(self.banner_picker)
         art_layout.addWidget(self.frame_check)
-        self.vc_look_button = QPushButton("Set up VC Console Look (default look)…",
-                                          objectName="secondary",
-                                          clicked=lambda: self.install_banner_template()
-                                          and self._apply_artwork())
-        art_layout.addWidget(self.vc_look_button)
+        # Offers whatever template the current ROM still needs.
+        self.setup_button = QPushButton(objectName="secondary", clicked=self._setup_needed)
+        art_layout.addWidget(self.setup_button)
         art_layout.addWidget(self.art_status)
 
         # Advanced card (collapsible)
@@ -540,15 +541,22 @@ class MainWindow(QMainWindow):
         adv.setContentsMargins(0, 4, 0, 0)
         rows = [("Title ID", self.title_id_edit), ("Product code", self.product_code_edit),
                 ("Save type", self.save_combo), ("Plate language", self.plate_lang)]
+        self._gba_only: list[QWidget] = []
         for i, (label, widget) in enumerate(rows):
-            adv.addWidget(QLabel(label), i, 0)
+            caption = QLabel(label)
+            adv.addWidget(caption, i, 0)
             adv.addWidget(widget, i, 1, 1, 2)
-        adv.addWidget(QLabel("LCD ghosting"), 4, 0)
+            if i >= 2:
+                self._gba_only += [caption, widget]
+        ghost_caption, bright_caption = QLabel("LCD ghosting"), QLabel("Brightness")
+        adv.addWidget(ghost_caption, 4, 0)
         adv.addWidget(self.ghosting, 4, 1)
         adv.addWidget(self.ghosting_label, 4, 2)
-        adv.addWidget(QLabel("Brightness"), 5, 0)
+        adv.addWidget(bright_caption, 5, 0)
         adv.addWidget(self.brightness, 5, 1)
         adv.addWidget(self.brightness_label, 5, 2)
+        self._gba_only += [ghost_caption, self.ghosting, self.ghosting_label, bright_caption,
+                           self.brightness, self.brightness_label]
 
         # Preview + actions
         preview_card, preview_layout = card("Preview")
@@ -625,30 +633,39 @@ class MainWindow(QMainWindow):
             self.load_rom(Path(urls[0].toLocalFile()))
 
     def browse_rom(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Select GBA ROM", "", ROM_FILTER)
+        path, _ = QFileDialog.getOpenFileName(self, "Select ROM", "", ROM_FILTER)
         if path:
             self.load_rom(Path(path))
 
     def load_rom(self, path: Path):
         try:
-            rom = gba.GbaRom.parse(path.read_bytes())
+            system, rom = builder.load_rom(path)
         except (OSError, InjectError) as exc:
             QMessageBox.warning(self, "Invalid ROM", str(exc))
             return
-        self.rom, self.rom_path = rom, path
-        detected = rom.detect_save_type()
+        self.rom, self.rom_path, self.system = rom, path, system
+        for widget in self._gba_only:
+            widget.setVisible(system.key == "gba")
         self.drop.headline.setText(path.name)
         self.drop.headline.setObjectName("cardTitle")
         self.drop.headline.style().unpolish(self.drop.headline)
         self.drop.headline.style().polish(self.drop.headline)
-        self.drop.details.setText(
-            f"{rom.game_code or '----'} · {len(rom.data) / 1024 / 1024:.1f} MiB · {detected.label}"
-            + ("" if rom.header_valid else " · ⚠ bad header checksum"))
+        size = f"{len(rom.data) / 1024 / 1024:.1f} MiB"
+        if system.key == "gba":
+            self.drop.details.setText(
+                f"{rom.game_code or '----'} · {size} · {rom.detect_save_type().label}"
+                + ("" if rom.header_valid else " · ⚠ bad header checksum"))
+        else:
+            ready = system.forwarder in forwarder.installed_kinds()
+            self.drop.details.setText(f"{system.name} · {size} · "
+                                      + ("emulator forwarder" if ready
+                                         else "⚠ no emulator template yet"))
         self.drop.release.setText("Looking up release…")
-        self.drop.set_cover(None)
+        self.drop.set_cover(None, system.key.upper())
         self.title_edit.setText(path.stem)
-        self.title_id_edit.setText(f"{default_title_id(rom):016X}")
-        self.product_code_edit.setText(default_product_code(rom))
+        title_id = default_title_id(rom)
+        self.title_id_edit.setText(f"{title_id:016X}")
+        self.product_code_edit.setText(default_product_code(rom, system, title_id))
         self.save_combo.setCurrentIndex(0)
         self.output_edit.setText(str(path.with_suffix(".cia")))
         self.found = artwork.Artwork()
@@ -657,8 +674,9 @@ class MainWindow(QMainWindow):
 
     def lookup_artwork(self):
         self._lookup_id += 1
-        lookup_id, rom, path = self._lookup_id, self.rom, self.rom_path
-        Task(self, lambda _log: artwork.lookup(rom.data, rom.game_code, path.name),
+        lookup_id, rom, path, system = self._lookup_id, self.rom, self.rom_path, self.system
+        Task(self, lambda _log: artwork.lookup(system.strip_header(rom.data), rom.game_code,
+                                               path.name, system=system.database),
              lambda result, error: self._artwork_found(lookup_id, result, error))
 
     def _artwork_found(self, lookup_id: int, result, error: str):
@@ -688,8 +706,12 @@ class MainWindow(QMainWindow):
     def _apply_artwork(self):
         self.icon_picker.set_available(artwork.available(artwork.ICON_STYLES, self.found))
         flat = artwork.available(artwork.BANNER_STYLES, self.found)
-        # Prefer the VC look once its template is set up; otherwise offer it last.
-        self.banner_picker.set_available([GBA_3D, *flat] if vcbanner.is_installed() else [*flat, GBA_3D])
+        if self.system.key != "gba":  # the VC Console Look model is a GBA block
+            self.banner_picker.set_available(flat)
+        else:  # prefer it once set up; otherwise offer it last
+            self.banner_picker.set_available([GBA_3D, *flat] if vcbanner.is_installed()
+                                             else [*flat, GBA_3D])
+        self.refresh_status()
 
     def browse_output(self):
         path, _ = QFileDialog.getSaveFileName(self, "Save CIA", self.output_edit.text(),
@@ -704,7 +726,7 @@ class MainWindow(QMainWindow):
     # --- artwork -----------------------------------------------------------
 
     def _render(self, picker: ArtPicker, render) -> Image.Image:
-        title = self.title_edit.text().strip() or "GBA Game"
+        title = self.title_edit.text().strip() or "Game"
         if picker.style == CUSTOM and picker.custom_path:
             try:
                 return art.load_image(picker.custom_path)
@@ -715,11 +737,12 @@ class MainWindow(QMainWindow):
         return render(style, self.found, title)
 
     def refresh_art(self):
-        title = self.title_edit.text().strip() or "GBA Game"
+        title = self.title_edit.text().strip() or "Game"
         self.icon_image = self._render(self.icon_picker, artwork.render_icon)
         icon = art.vc_icon_frame(self.icon_image) if self.frame_check.isChecked() else self.icon_image
         self.banner_screen = None
-        if self.banner_picker.style == GBA_3D and vcbanner.is_installed():
+        if self.banner_picker.style == GBA_3D and vcbanner.is_installed() \
+                and self.system.key == "gba":
             imgs = self.found.images
             self.banner_screen = imgs.get("title") or imgs.get("snap") or imgs.get("boxart") \
                 or art.default_banner(title)
@@ -741,13 +764,57 @@ class MainWindow(QMainWindow):
     # --- template / tools --------------------------------------------------
 
     def refresh_status(self):
-        self.vc_look_button.setVisible(not vcbanner.is_installed())
+        need = self._missing_template()
+        self.setup_button.setVisible(need is not None)
+        if need == "vclook":
+            self.setup_button.setText("Set up VC Console Look (default look)…")
+        elif need:
+            self.setup_button.setText(f"Set up {systems.FORWARDER_KINDS[need]} emulator template…")
         missing = [name for name in tools.TOOLS if tools.find_tool(name) is None]
+        emulators = forwarder.installed_kinds()
         parts = [f"vcinject {__version__}",
                  "template " + ("installed" if template.is_installed() else "will be downloaded"),
                  "VC Console Look " + ("installed" if vcbanner.is_installed() else "not set up"),
+                 f"emulators {len(emulators)}/{len(systems.FORWARDER_KINDS)}",
                  "tools OK" if not missing else "missing " + ", ".join(missing)]
         self.status_label.setText("  ·  ".join(parts))
+
+    def _missing_template(self) -> str | None:
+        """'vclook', a forwarder kind, or None when the current ROM has all it needs."""
+        if self.system.forwarder:
+            return None if self.system.forwarder in forwarder.installed_kinds() else self.system.forwarder
+        return None if vcbanner.is_installed() else "vclook"
+
+    def _setup_needed(self):
+        need = self._missing_template()
+        if need == "vclook":
+            if self.install_banner_template():
+                self._apply_artwork()
+        elif need:
+            self.install_forwarder_templates()
+
+    def install_forwarder_templates(self):
+        QMessageBox.information(
+            self, "Emulator templates",
+            "SNES, NES, Game Boy / Color and Mega Drive games run in an emulator "
+            "(RetroArch, snes9x or VirtuaNES) packed into the CIA. vcinject reuses one existing "
+            "inject per system as template, e.g. ones made with NSUI.\n\nChoose one or more "
+            "such injects (.cia); the system is detected automatically.")
+        paths, _ = QFileDialog.getOpenFileNames(self, "Choose emulator injects", "", INJECT_FILTER)
+        installed, errors = [], []
+        for path in paths:
+            try:
+                installed.append(systems.FORWARDER_KINDS[forwarder.install_from(Path(path)).kind])
+            except (OSError, InjectError) as exc:
+                errors.append(f"{Path(path).name}: {exc}")
+        if installed or errors:
+            text = ("Installed: " + ", ".join(installed) if installed else "")
+            if errors:
+                text += ("\n\n" if text else "") + "Not usable:\n" + "\n".join(errors)
+            QMessageBox.information(self, "Emulator templates", text)
+        if self.rom_path is not None and installed:
+            self.load_rom(self.rom_path)
+        self.refresh_status()
 
     def setup_template(self):
         box = QMessageBox(self)
@@ -758,10 +825,14 @@ class MainWindow(QMainWindow):
         download = box.addButton("Download", QMessageBox.AcceptRole)
         donor = box.addButton("From donor…", QMessageBox.ActionRole)
         banner = box.addButton("VC Console Look from inject…", QMessageBox.ActionRole)
+        emulators = box.addButton("Emulator templates…", QMessageBox.ActionRole)
         box.addButton(QMessageBox.Cancel)
         box.exec()
         if box.clickedButton() is banner:
             self.install_banner_template()
+            return
+        if box.clickedButton() is emulators:
+            self.install_forwarder_templates()
             return
         if box.clickedButton() is download:
             self._run(lambda log: (log("Downloading template..."), template.download())[1],
@@ -855,10 +926,10 @@ class MainWindow(QMainWindow):
         self.log_view.clear()
 
         def run(log):
-            if not template.is_installed():
+            if self.system.key == "gba" and not template.is_installed():
                 log("No GBA VC template installed yet, downloading it once...")
                 template.download()
-            return build_gba(options, log=log)
+            return builder.build(options, log=log)
 
         self._run(run, None)
 

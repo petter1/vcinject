@@ -9,6 +9,12 @@ Currently supported:
 | System | Method | Status |
 |--------|--------|--------|
 | Game Boy Advance | Native GBA VC (AGB_FIRM) | ✅ |
+| Super Nintendo | snes9x_3ds forwarder | ✅ (template needed) |
+| Mega Drive / Genesis | RetroArch forwarder | ✅ (template needed) |
+| Game Boy / Color | RetroArch forwarder | ✅ (template needed) |
+| NES | VirtuaNES / RetroArch forwarder | ✅ (template needed) |
+| NES, GB/GBC (official VC emulator) | planned | – |
+| SNES (official New 3DS VC emulator) | planned | – |
 
 ## How it works
 
@@ -111,6 +117,24 @@ later builds work offline.
 
 If no match is found, generated art is used. `--icon`/`--banner` or
 "Custom image…" in the GUI override any style.
+
+### Other systems (emulator forwarders)
+
+SNES, NES, Game Boy / Color and Mega Drive games run in a homebrew emulator
+(snes9x_3ds, VirtuaNES or RetroArch) that is packed into the CIA together with
+the ROM. vcinject doesn't ship any emulator: it reuses one inject per system
+that you already have, e.g. made with NSUI, as template. Only the ROM, the
+title ID and the save folder name are swapped, so the result is identical to
+what NSUI builds.
+
+```sh
+vcinject setup --forwarder-donor "Super Metroid.cia" "Sonic.cia" "Mario Land.cia" "SMB.cia"
+vcinject build "Mega Man X.sfc" --qr      # any supported ROM type
+```
+
+The system is detected from each template and from the ROM's extension
+(`.sfc .smc .nes .gb .gbc .md .gen .smd`). Saves of forwarders live on the SD
+card in `nsui_formwarders_data/<system>_<id>_<title>/`.
 
 ### VC Console Look (3D GBA banner)
 
