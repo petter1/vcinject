@@ -156,7 +156,9 @@ vcinject gba game.gba --qr           # build, then serve + show QR code
 vcinject serve a.cia b.cia           # serve existing CIAs (one QR code for all)
 ```
 
-In the GUI, click **Install via QR…** (also offered after each build).
+In the GUI, click **Install via QR**: it builds the CIA with the current
+settings and shows the QR code right in the window, together with the
+download status. **Stop** (or closing the window) ends the server.
 On the 3DS open **FBI → Remote Install → Scan QR Code** and scan the code.
 The 3DS and the computer must be on the same network. The server runs until
 you press Ctrl+C or close the dialog. On macOS, allow incoming connections if

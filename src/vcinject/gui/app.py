@@ -10,7 +10,7 @@ try:
     from PySide6.QtGui import (QColor, QFont, QFontDatabase, QImage, QLinearGradient, QPainter,
                                QPainterPath, QPen, QPixmap, QPolygonF, QTransform)
     from PySide6.QtWidgets import (
-        QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
+        QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QFrame,
         QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
         QPushButton, QSlider, QToolButton, QVBoxLayout, QWidget,
     )
@@ -383,39 +383,52 @@ class ArtPicker(QWidget):
         self.changed.emit()
 
 
-class QrInstallDialog(QDialog):
-    """Serves CIAs while open and shows the QR code for FBI's remote install."""
+class QrPanel(QFrame):
+    """Inline QR code for FBI's remote install; serves the CIA while visible."""
     status = Signal(str)  # emitted from server threads, delivered on the GUI thread
 
-    def __init__(self, files: list[Path], parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Install via QR code")
-        self.setMinimumWidth(380)
-        self.server = serve.CiaServer(files, log=self.status.emit).start()
+    def __init__(self):
+        super().__init__(objectName="card")
+        self.server: serve.CiaServer | None = None
+        self.qr = QLabel(alignment=Qt.AlignCenter)
+        self.qr.setFixedSize(176, 176)
+        self.title = QLabel(objectName="cardTitle", wordWrap=True)
+        steps = QLabel("On the 3DS open <b>FBI</b> → <b>Remote Install</b> → <b>Scan QR Code</b>. "
+                       "The 3DS must be on the same Wi-Fi.", wordWrap=True)
+        self.url = QLabel(objectName="muted", wordWrap=True,
+                          textInteractionFlags=Qt.TextSelectableByMouse)
+        self.state = QLabel("Waiting for the 3DS…", wordWrap=True)
+        stop = QPushButton("Stop", objectName="secondary", clicked=self.stop)
+        text = QVBoxLayout()
+        text.addWidget(self.title)
+        text.addWidget(steps)
+        text.addWidget(self.url)
+        text.addStretch(1)
+        text.addWidget(self.state)
+        text.addWidget(stop, alignment=Qt.AlignLeft)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.addWidget(self.qr)
+        layout.addLayout(text, 1)
+        self.status.connect(self.state.setText)
+        self.hide()
 
-        qr = QLabel(alignment=Qt.AlignCenter)
-        qr.setPixmap(QPixmap.fromImage(QImage.fromData(self.server.qr_png(scale=6))))
-        steps = QLabel("On the 3DS open <b>FBI</b> → <b>Remote Install</b> → <b>Scan QR Code</b> "
-                       "and point the camera at this code. The 3DS must be on the same Wi-Fi.",
-                       wordWrap=True)
-        urls = QLabel("<br>".join(self.server.urls), objectName="muted",
-                      textInteractionFlags=Qt.TextSelectableByMouse)
-        self.log = QPlainTextEdit(readOnly=True, placeholderText="Waiting for the 3DS…")
-        self.log.setMaximumHeight(90)
-        self.status.connect(self.log.appendPlainText)
-        buttons = QDialogButtonBox(QDialogButtonBox.Close, rejected=self.reject)
-        buttons.button(QDialogButtonBox.Close).setText("Stop server && close")
+    def start(self, path: Path):
+        self.stop()
+        self.server = serve.CiaServer([path], log=self.status.emit).start()
+        image = QImage.fromData(self.server.qr_png(scale=5))
+        self.qr.setPixmap(QPixmap.fromImage(image).scaled(176, 176, Qt.KeepAspectRatio,
+                                                          Qt.FastTransformation))
+        self.title.setText(f"Install {path.name}")
+        self.url.setText("<br>".join(self.server.urls))
+        self.state.setText("Waiting for the 3DS…")
+        self.show()
 
-        layout = QVBoxLayout(self)
-        layout.addWidget(steps)
-        layout.addWidget(qr)
-        layout.addWidget(urls)
-        layout.addWidget(self.log)
-        layout.addWidget(buttons)
-
-    def done(self, result):
-        self.server.stop()
-        super().done(result)
+    def stop(self):
+        if self.server is not None:
+            self.server.stop()
+            self.server = None
+        self.hide()
 
 
 # --- main window ---------------------------------------------------------------
@@ -433,6 +446,7 @@ class MainWindow(QMainWindow):
         self.banner_screen: Image.Image | None = None
         self.last_output: Path | None = None
         self._busy = False
+        self._qr_after_build = False
         self._lookup_id = 0
         self._art_timer = QTimer(self, singleShot=True, interval=250, timeout=self.refresh_art)
 
@@ -538,8 +552,10 @@ class MainWindow(QMainWindow):
         out_row.addWidget(self.output_edit, 1)
         out_row.addWidget(QPushButton("…", clicked=self.browse_output, maximumWidth=36))
         self.build_button = QPushButton("Build CIA", objectName="primary", clicked=self.build)
-        self.qr_button = QPushButton("Install via QR…", objectName="secondary",
+        self.qr_button = QPushButton("Install via QR", objectName="secondary",
                                      clicked=self.install_via_qr)
+        self.qr_button.setToolTip("Build the CIA with the current settings and show a QR "
+                                  "code for FBI's remote install")
         actions = QHBoxLayout()
         actions.addWidget(self.build_button, 2)
         actions.addWidget(self.qr_button, 1)
@@ -567,6 +583,8 @@ class MainWindow(QMainWindow):
         right.addWidget(preview_card)
         right.addLayout(out_row)
         right.addLayout(actions)
+        self.qr_panel = QrPanel()
+        right.addWidget(self.qr_panel)
         right.addWidget(self.log_view, 1)
         columns = QHBoxLayout()
         columns.setSpacing(16)
@@ -816,12 +834,13 @@ class MainWindow(QMainWindow):
             online_artwork=False,
         )
 
-    def build(self):
+    def build(self, then_qr: bool = False):
         try:
             options = self.collect_options()
         except InjectError as exc:
             QMessageBox.warning(self, "Cannot build", str(exc))
             return
+        self._qr_after_build = then_qr
         self.log_view.clear()
 
         def run(log):
@@ -855,27 +874,31 @@ class MainWindow(QMainWindow):
             self.log_view.appendPlainText(success_message)
         elif result is not None:
             self.last_output = result.output_path
-            box = QMessageBox(QMessageBox.Information, "Done", f"Created {result.output_path}",
-                              parent=self)
-            qr = box.addButton("Install via QR…", QMessageBox.ActionRole)
-            box.addButton(QMessageBox.Ok)
-            box.exec()
-            if box.clickedButton() is qr:
-                self.install_via_qr()
+            if self._qr_after_build:
+                self.show_qr(result.output_path)
+            else:
+                QMessageBox.information(self, "Done", f"Created {result.output_path}")
 
     def install_via_qr(self):
-        path = self.last_output
-        if path is None or not path.is_file():
-            chosen, _ = QFileDialog.getOpenFileName(self, "Select CIA", "", "CIA (*.cia)")
-            if not chosen:
-                return
-            path = Path(chosen)
+        """Build with the current settings, then show the QR code inline."""
+        if self.rom_path is not None:
+            self.build(then_qr=True)
+            return
+        chosen, _ = QFileDialog.getOpenFileName(self, "Select CIA to install", "", "CIA (*.cia)")
+        if chosen:
+            self.show_qr(Path(chosen))
+
+    def show_qr(self, path: Path):
         try:
-            dialog = QrInstallDialog([path], self)
+            self.qr_panel.start(path)
         except InjectError as exc:
             QMessageBox.critical(self, "Cannot start server", str(exc))
             return
-        dialog.exec()
+        self.log_view.appendPlainText(f"Serving {path.name} at {self.qr_panel.server.urls[0]}")
+
+    def closeEvent(self, event):
+        self.qr_panel.stop()
+        super().closeEvent(event)
 
 
 def _display_title(release: str) -> str:
