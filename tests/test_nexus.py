@@ -68,3 +68,17 @@ def test_hack_detection():
     assert artwork.is_probably_hack(firered, "Pokemon Clover.gba")
     assert not artwork.is_probably_hack(firered, "Pokemon - FireRed Version (Germany) [T-De].gba")
     assert not artwork.is_probably_hack(Match(firered.name, "crc"), "Pokemon Clover.gba")
+
+
+def test_menu_offers_the_site_only_when_it_has_the_game(monkeypatch, tmp_path):
+    from vcinject import library, systems
+
+    _site(monkeypatch, tmp_path)
+    gba = systems.SYSTEMS["gba"]
+    nexus.slugs()  # the game list is loaded (as after the first lookup)
+    assert library.nexus_page_exists("Pokemon Clover", gba)
+    assert not library.nexus_page_exists("Bionicle Heroes", gba)  # no similar title at all
+    assert library.nexus_url("Pokemon Clover", gba, "de") == f"{nexus.BASE}/de/games/pokemon-clover"
+    assert library.nexus_url("Pokemon Clover", systems.SYSTEMS["snes"]) is None
+    # remembered: a game the site does not have on that console is no longer offered
+    assert not library.nexus_page_exists("Pokemon Clover", systems.SYSTEMS["snes"])

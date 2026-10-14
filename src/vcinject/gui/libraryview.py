@@ -1254,9 +1254,10 @@ class LibraryPanel(QFrame):
             menu.addAction("Open on libretro (database entry)", lambda: open_game_page(
                 self, "libretro", game.system, game.releases[0] if game.releases else None,
                 game.title))
-            menu.addAction("Open on RetroGamesNexus", lambda: open_game_page(
-                self, "nexus", game.system, game.releases[0] if game.releases else None,
-                game.title))
+            first = game.releases[0] if game.releases else None
+            if library.nexus_page_exists(game.title, game.system, first):
+                menu.addAction("Open on RetroGamesNexus", lambda: open_game_page(
+                    self, "nexus", game.system, first, game.title))
             menu.exec(global_pos)
             return
         if entry.kind != "rom":
@@ -1283,8 +1284,9 @@ class LibraryPanel(QFrame):
         if rom.method != "retrogamesnexus":
             menu.addAction("Open on libretro (database entry)", lambda: open_game_page(
                 self, "libretro", rom.system, rom.release, rom.title))
-        menu.addAction("Open on RetroGamesNexus", lambda: open_game_page(
-            self, "nexus", rom.system, rom.release, rom.title))
+        if library.nexus_page_exists(rom.title, rom.system, rom.release):
+            menu.addAction("Open on RetroGamesNexus", lambda: open_game_page(
+                self, "nexus", rom.system, rom.release, rom.title))
         menu.addAction("Show in folder",
                        lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(rom.path.parent))))
         menu.exec(global_pos)

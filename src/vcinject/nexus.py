@@ -89,6 +89,14 @@ def slugs() -> list[str]:
     return result
 
 
+def known_slugs() -> list[str] | None:
+    """The game list if it is already loaded or on disk (never downloads)."""
+    path = _cache_dir() / "sitemap.xml"
+    if path in _SLUGS:
+        return _SLUGS[path]
+    return slugs() if path.is_file() else None
+
+
 def candidates(title: str, all_slugs: list[str]) -> list[tuple[float, str]]:
     """Slugs whose title is close to ``title``, best first."""
     wanted_words = words(title)

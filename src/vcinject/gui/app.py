@@ -8,8 +8,8 @@ from pathlib import Path
 
 try:
     from PySide6.QtCore import (QLocale, QObject, QPointF, QRectF, QSize, Qt, QThread, QTimer,
-                                Signal)
-    from PySide6.QtGui import (QColor, QFont, QFontDatabase, QImage, QLinearGradient, QPainter,
+                                QUrl, Signal)
+    from PySide6.QtGui import (QColor, QDesktopServices, QFont, QFontDatabase, QImage, QLinearGradient, QPainter,
                                QPainterPath, QPen, QPixmap, QPolygonF, QTransform)
     from PySide6.QtWidgets import (
         QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame,
@@ -747,7 +747,8 @@ class MainWindow(QMainWindow):
             parts.append(self._dump)
         if match and match.method != "retrogamesnexus":
             parts.append('<a href="libretro">libretro ↗</a>')
-        parts.append('<a href="nexus">RetroGamesNexus ↗</a>')
+        if getattr(self, "_nexus_url", None):  # only when the site has the game
+            parts.append('<a href="nexus">RetroGamesNexus ↗</a>')
         self.drop.ids.setText(" · ".join(parts))
         self.drop.ids.setVisible(True)
 
@@ -762,7 +763,26 @@ class MainWindow(QMainWindow):
         self._dump = f'<span style="color:{colour}">{label}</span>' if colour else label
         self._show_ids()
 
+    def _find_nexus_page(self):
+        """Look for the game on RetroGamesNexus in the background; the link shows up
+        only when it is there."""
+        match = self.found.match if self.found else None
+        title = (match.name if match else library.plain_stem(self.rom_path)).split(" (", 1)[0]
+        release = match.name if match and match.method != "retrogamesnexus" else None
+        language = QLocale.system().name().split("_")[0]
+        path, system = self.rom_path, self.system
+        Task(self, lambda _log: library.nexus_url(title, system, language, release),
+             lambda url, error: self._nexus_found(path, url))
+
+    def _nexus_found(self, path: Path, url: str | None):
+        if path == self.rom_path:
+            self._nexus_url = url
+            self._show_ids()
+
     def _open_game_page(self, site: str):
+        if site == "nexus" and getattr(self, "_nexus_url", None):
+            QDesktopServices.openUrl(QUrl(self._nexus_url))
+            return
         match = self.found.match if self.found else None
         title = (match.name if match else library.plain_stem(self.rom_path)).split(" (", 1)[0]
         open_game_page(self, site, self.system, match.name if match else None, title)
@@ -831,6 +851,7 @@ class MainWindow(QMainWindow):
         self._show_versions(path)
         self.found = artwork.Artwork()
         self._dump = ""
+        self._nexus_url = None
         self._show_ids()
         self._dump_id = getattr(self, "_dump_id", 0) + 1
         check_id, data = self._dump_id, rom.data
@@ -890,6 +911,7 @@ class MainWindow(QMainWindow):
                                           or library.plain_stem(self.rom_path))
         self.drop.set_cover(cover)
         self._show_ids()
+        self._find_nexus_page()
         self._apply_artwork()
         if self._qr_when_ready:
             self._qr_when_ready = False

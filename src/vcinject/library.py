@@ -771,12 +771,10 @@ def libretro_url(release: str | None, system: systems.System) -> str | None:
     return artwork.database_url(release, system.database) if release else None
 
 
-def nexus_url(title: str, system: systems.System, language: str = "",
-              release: str | None = None) -> str | None:
-    """The game's page on RetroGamesNexus (may download its game list once). The
-    site uses English titles, so other regions' names of ``release`` are tried too
-    ("Smaragd-Edition" is listed as "Pokemon Emerald")."""
-    from . import nexus
+_NEXUS_PAGES: dict[tuple, str | None] = {}  # (system, title, release) -> slug or None
+
+
+def _nexus_titles(title: str, system: systems.System, release: str | None) -> list[str]:
     titles = [title]
     if release:
         try:
@@ -784,11 +782,40 @@ def nexus_url(title: str, system: systems.System, language: str = "",
             titles += [n.split(" (", 1)[0] for n in db.siblings(release)[:8]]
         except InjectError:
             pass
-    try:
-        game = nexus.find(list(dict.fromkeys(titles)), system.key)
-    except InjectError:
-        return None
-    return nexus.page_url(game.slug, language) if game else None
+    return list(dict.fromkeys(titles))
+
+
+def nexus_url(title: str, system: systems.System, language: str = "",
+              release: str | None = None) -> str | None:
+    """The game's page on RetroGamesNexus (may download its game list once). The
+    site uses English titles, so other regions' names of ``release`` are tried too
+    ("Smaragd-Edition" is listed as "Pokemon Emerald"). Answers are remembered."""
+    from . import nexus
+    key = (system.key, title, release)
+    if key not in _NEXUS_PAGES:
+        try:
+            game = nexus.find(_nexus_titles(title, system, release), system.key)
+        except InjectError:
+            return None  # offline: ask again later
+        _NEXUS_PAGES[key] = game.slug if game else None
+    slug = _NEXUS_PAGES[key]
+    return nexus.page_url(slug, language) if slug else None
+
+
+def nexus_page_exists(title: str, system: systems.System, release: str | None = None) -> bool:
+    """Quick answer for menus, without going online: True when the page is known
+    or the site lists a game of a similar name (checked on opening); False when
+    it surely has none."""
+    from . import nexus
+    key = (system.key, title, release)
+    if key in _NEXUS_PAGES:
+        return _NEXUS_PAGES[key] is not None
+    if system.key not in nexus.PLATFORMS:
+        return False
+    slugs = nexus.known_slugs()
+    if slugs is None:
+        return True  # the site's game list is not loaded yet: offer it
+    return any(nexus.candidates(t, slugs) for t in _nexus_titles(title, system, release))
 
 
 # --- downloading all covers at once -------------------------------------------------
