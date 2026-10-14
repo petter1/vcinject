@@ -153,9 +153,10 @@ The library remembers what it found out about each file – release, year,
 checksum and a small cover – so unchanged files appear instantly on the next
 start without being read again; renamed or moved files are recognised by their
 checksum. Nothing expires: selecting a ROM checks it online again in the
-background (once per session, can be switched off in the **↻** menu),
-right-click → *Reload cover and info* does it on demand, and **↻ → Reload all
-covers and info** refreshes the whole library.
+background (once per session; *Check covers on selection* switches it off),
+right-click → *Reload cover and info* does it on demand, and **Covers**
+refreshes the whole library. The game lists and the covers of missing games
+are cached the same way. **Rescan** reads the folder again.
 
 Under the ROM, vcinject shows its **CRC32** and cartridge **serial** – the
 keys No-Intro and libretro identify a dump by (libretro has no running index

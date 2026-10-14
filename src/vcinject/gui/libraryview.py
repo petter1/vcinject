@@ -18,8 +18,8 @@ from pathlib import Path
 from PIL import Image
 from PySide6.QtCore import (QEasingCurve, QFile, QLocale, QPointF, QRectF, QSize, Qt, QTimer, QUrl,
                             QVariantAnimation, Signal)
-from PySide6.QtGui import (QBrush, QColor, QDesktopServices, QFont, QLinearGradient, QPainter, QPen,
-                           QPixmap, QTransform)
+from PySide6.QtGui import (QBrush, QColor, QDesktopServices, QFont, QIcon, QLinearGradient, QPainter,
+                           QPen, QPixmap, QTransform)
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListView, QListWidget, QListWidgetItem, QMainWindow,
@@ -597,26 +597,6 @@ class LibraryPanel(QFrame):
         # --- controls ---
         title = QLabel("Library", objectName="cardTitle")
         choose = QPushButton("Folder…", clicked=self.choose_folder)
-        refresh = QToolButton(text="↻", clicked=self.rescan,
-                              toolTip="Scan the folder again (menu: reload covers)")
-        refresh.setPopupMode(QToolButton.MenuButtonPopup)
-        reload_menu = QMenu(refresh)
-        reload_menu.addAction("Scan folder again", self.rescan)
-        reload_menu.addAction("Reload all covers and info", self.reload_all)
-        reload_menu.addSeparator()
-        self.check_on_select = reload_menu.addAction("Check cover online when selecting a ROM")
-        self.check_on_select.setCheckable(True)
-        self.check_on_select.setChecked(self.settings.value("library/check_on_select", True,
-                                                            type=bool))
-        self.check_on_select.toggled.connect(
-            lambda on: self.settings.setValue("library/check_on_select", on))
-        refresh.setMenu(reload_menu)
-        zip_roms = QToolButton(text="Zip", clicked=self.zip_roms,
-                               toolTip="Pack every unzipped ROM into its own .zip "
-                                       "(saves space, vcinject reads zips)")
-        names = QToolButton(text="Names", clicked=self.clean_names,
-                            toolTip="Rename identified ROMs to their official release name "
-                                    "(keeps the selfdumped mark)")
         top = QHBoxLayout()
         top.addWidget(title, 1)
         self.view_choice = QComboBox()
@@ -631,10 +611,31 @@ class LibraryPanel(QFrame):
                                   toolTip="Open the library in its own window "
                                           "(grid, details, Cover Flow)")
             top.addWidget(pop_out)
-        top.addWidget(names)
-        top.addWidget(zip_roms)
-        top.addWidget(refresh)
         top.addWidget(choose)
+        # tools: one button each, icon and text
+        tools = QHBoxLayout()
+        tools.setSpacing(4)
+        for name, text, slot, tip in (
+                ("rescan", "Rescan", self.rescan, "Scan the ROM folder again"),
+                ("covers", "Covers", self.reload_all,
+                 "Download release info and covers of the whole library again"),
+                ("names", "Names", self.clean_names,
+                 "Rename identified ROMs to their official release name (keeps the selfdumped mark)"),
+                ("zip", "Zip", self.zip_roms,
+                 "Pack every unzipped ROM into its own .zip (saves space, vcinject reads zips)")):
+            button = QToolButton(text=text, toolTip=tip)
+            button.setIcon(tool_icon(name, self.palette().text().color()))
+            button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+            button.clicked.connect(slot)
+            tools.addWidget(button)
+        tools.addStretch(1)
+        self.check_on_select = QCheckBox("Check covers on selection")
+        self.check_on_select.setToolTip("Look up release and cover again the first time a ROM "
+                                         "is selected in a session")
+        self.check_on_select.setChecked(self.settings.value("library/check_on_select", True,
+                                                            type=bool))
+        self.check_on_select.toggled.connect(
+            lambda on: self.settings.setValue("library/check_on_select", on))
         self.folder_label = QLabel("No folder chosen", objectName="muted")
         self.folder_label.setWordWrap(True)
         self.search = QLineEdit(placeholderText="Search")
@@ -714,6 +715,7 @@ class LibraryPanel(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.addLayout(top)
+        layout.addLayout(tools)
         layout.addWidget(self.folder_label)
         if grid:  # filters in two rows above the view
             row1 = QHBoxLayout()
@@ -724,6 +726,8 @@ class LibraryPanel(QFrame):
             for widget in (self.stacks, self.show_missing, self.owned_first, self.region,
                            self.missing_style):
                 row2.addWidget(widget)
+            row2.addStretch(1)
+            row2.addWidget(self.check_on_select)
             row2.addStretch(1)
             layout.addLayout(row2)
         else:
@@ -742,6 +746,7 @@ class LibraryPanel(QFrame):
             layout.addLayout(row)
             layout.addWidget(self.region)
             layout.addWidget(self.missing_style)
+            layout.addWidget(self.check_on_select)
         layout.addWidget(self.views, 1)
         layout.addWidget(self.count)
         self._analyzed.connect(self._update_row)
@@ -1501,6 +1506,38 @@ class LibraryPanel(QFrame):
         self.settings.setValue("library/missing_style", self.missing_style.currentData())
         self._icons = {}
         self._refresh()
+
+
+def tool_icon(name: str, colour: QColor) -> QIcon:
+    """Simple line icons for the library tools, drawn in the text colour."""
+    pix = QPixmap(64, 64)
+    pix.fill(Qt.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.Antialiasing)
+    pen = QPen(colour, 5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+    p.setPen(pen)
+    if name == "rescan":  # circular arrow
+        p.drawArc(QRectF(12, 12, 40, 40), 60 * 16, 290 * 16)
+        p.setBrush(colour)
+        p.setPen(Qt.NoPen)
+        p.drawPolygon([QPointF(36, 4), QPointF(52, 14), QPointF(35, 22)])
+    elif name == "covers":  # picture with a mountain and the sun
+        p.drawRoundedRect(QRectF(8, 12, 48, 40), 5, 5)
+        p.drawPolyline([QPointF(12, 46), QPointF(26, 30), QPointF(36, 40), QPointF(42, 34),
+                        QPointF(52, 46)])
+        p.setBrush(colour)
+        p.drawEllipse(QPointF(44, 23), 4, 4)
+    elif name == "names":  # a label tag
+        p.drawPolygon([QPointF(8, 20), QPointF(40, 20), QPointF(56, 32), QPointF(40, 44),
+                       QPointF(8, 44)])
+        p.drawLine(QPointF(15, 32), QPointF(32, 32))
+    elif name == "zip":  # an archive box with a zipper
+        p.drawRoundedRect(QRectF(12, 8, 40, 48), 4, 4)
+        for y in (16, 24, 32):
+            p.drawLine(QPointF(28, y), QPointF(36, y))
+        p.drawRect(QRectF(27, 38, 10, 10))
+    p.end()
+    return QIcon(pix)
 
 
 def open_game_page(parent: QWidget, site: str, system: systems.System, release: str | None,
