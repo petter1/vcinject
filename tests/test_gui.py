@@ -137,3 +137,28 @@ def test_missing_games_only_of_owned_series(tmp_path, monkeypatch):
     panel.collected_only.setChecked(True)  # Tetris is a series too, but none of it is owned
     assert titles() == ["Pokemon - Sapphire Version", "Pokemon Pinball"]
     panel.stop()
+
+
+def test_owned_games_lead_their_stack(tmp_path, monkeypatch):
+    monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path / "data"))
+    from vcinject import library, systems
+    from vcinject.gui import libraryview
+
+    roms = tmp_path / "roms"
+    roms.mkdir()
+    (roms / "Pokemon - Sapphire Version.gba").write_bytes(b"\0" * 0x200)
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    panel = libraryview.LibraryPanel(autoload=False)
+    panel.owned_first.setChecked(False)  # even when owned and missing games are mixed
+    panel.stacks.setChecked(True)
+    panel.load(roms)
+    gba = systems.SYSTEMS["gba"]
+    panel._catalog = panel._missing = [library.CatalogGame(t, [f"{t} (Europe)"], gba)
+                                       for t in ("Pokemon - Emerald Version", "Pokemon Pinball")]
+    panel.show_missing.setChecked(True)
+    panel._catalog_timer.stop()
+    panel._refresh()
+    [stack] = [e for e in panel._entries if e.kind == "stack"]
+    assert [c.title for c in stack.children] == ["Pokemon - Sapphire Version",
+                                                 "Pokemon - Emerald Version", "Pokemon Pinball"]
+    panel.stop()

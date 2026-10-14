@@ -1042,7 +1042,8 @@ class LibraryPanel(QFrame):
             if series in placed:
                 continue
             placed.add(series)
-            games = members[series]
+            # own games first in a stack (its picture shows them on top), the rest in order
+            games = sorted(members[series], key=lambda g: g.kind != "rom")
             owned = sum(g.kind == "rom" for g in games)
             key = f"stack:{series}"
             expanded = key in self._expanded
