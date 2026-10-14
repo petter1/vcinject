@@ -222,8 +222,9 @@ class ThreeDsPreview(QWidget):
     def _draw_block(self, p: QPainter, top: QRectF):
         """Rotating block like the HOME Menu renders newer NSUI GBA banners.
 
-        The block is drawn as a stack of rounded slices; slices near the front
-        and back shrink along a quarter circle, which gives the rounded edges.
+        The block is drawn as a stack of rounded slices. Front and back are the
+        size of the picture; towards the middle the slices grow along a quarter
+        circle, so the rounding starts where the picture ends.
         """
         import math
 
@@ -252,7 +253,8 @@ class ThreeDsPreview(QWidget):
             z = -half + thickness * i / steps
             d = max(0.0, abs(z) - (half - r))  # distance into the rounded part
             inset = r - math.sqrt(max(0.0, r * r - d * d))
-            w, h = fw - 2 * inset, fh - 2 * inset
+            # front/back are exactly the picture; the edge bulges out from there
+            w, h = fw + 2 * (r - inset), fh + 2 * (r - inset)
             poly, depth = quad(z, w, h)
             kind = "front" if i == 0 else "back" if i == steps else "side"
             # slices facing more sideways (larger d) are a bit darker
