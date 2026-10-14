@@ -51,7 +51,7 @@ def test_thumbnail_url_escapes_names():
 
 def test_styles_fall_back_when_art_missing():
     found = artwork.Artwork(images={"boxart": Image.new("RGB", (512, 512), "red")})
-    assert artwork.available(artwork.ICON_STYLES, found) == ["boxart", "boxart-full", "generated"]
+    assert artwork.available(artwork.ICON_STYLES, found) == ["boxart-full", "boxart", "generated"]
     assert artwork.available(artwork.BANNER_STYLES, found) == ["boxart", "generated"]
     icon, banner = artwork.default_art(found, "Game")
     assert icon.size == (192, 192)

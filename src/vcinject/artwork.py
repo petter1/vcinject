@@ -331,8 +331,8 @@ def _on_backdrop(background: Image.Image, foreground: Image.Image, size: tuple[i
 
 # Styles in order of preference; each needs the listed artwork kinds.
 ICON_STYLES = {
-    "boxart": ("Box art", ("boxart",)),
     "boxart-full": ("Box art (whole box)", ("boxart",)),
+    "boxart": ("Box art (cover only)", ("boxart",)),
     "logo": ("Logo", ("logo",)),
     "title": ("Title screen", ("title",)),
     "generated": ("Generated", ()),

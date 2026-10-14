@@ -109,8 +109,8 @@ later builds work offline.
 
 | Style | Icon | Banner |
 |-------|------|--------|
+| `boxart-full` | whole box (default) | – |
 | `boxart` | cover illustration, without the GBA side stripe and rating bar | whole box on a blurred backdrop |
-| `boxart-full` | whole box | – |
 | `logo` | game logo on a blurred backdrop | game logo on a blurred backdrop |
 | `title` | title screen | framed title screen |
 | `generated` | initials | title text |
