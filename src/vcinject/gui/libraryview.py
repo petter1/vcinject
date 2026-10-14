@@ -1521,13 +1521,7 @@ class LibraryPanel(QFrame):
                     games += library.catalog(systems.SYSTEMS[key], prefer, unreleased=betas)
                 except InjectError:
                     continue  # offline and never downloaded: skip that system
-            if tags:
-                for game in games:
-                    game.releases = [n for n in game.releases if any(f"{t}" in n for t in tags)]
-                games = [g for g in games if g.releases]
-                for game in games:
-                    game.title = game.releases[0].split(" (", 1)[0]
-            library.mark_owned(games, roms)
+            games = library.for_region(games, roms, tags)
             self._catalog_ready.emit(generation, games)
 
         threading.Thread(target=work, daemon=True).start()

@@ -499,6 +499,26 @@ _NOT_GAMES = ("(Unl", "(Pirate", "(Aftermarket", "(Program", "(Tech Demo", "(Hac
               "(Test Program", "(Enhancement Chip")
 
 
+def for_region(games: list[CatalogGame], roms: list[LibraryRom],
+               tags: tuple[str, ...]) -> list[CatalogGame]:
+    """Mark what is owned, then keep the games released in a region (``tags``,
+    e.g. "Europe", "Germany"; empty: all) named after their release there. Owned
+    games stay even when they are another region's version (a USA cartridge is
+    not "missing" in a Europe view)."""
+    mark_owned(games, roms)
+    if not tags:
+        return games
+    kept = []
+    for game in games:
+        regional = [n for n in game.releases if any(t in n for t in tags)]
+        if regional:
+            game.releases = regional
+            game.title = regional[0].split(" (", 1)[0]
+        if regional or game.owned:
+            kept.append(game)
+    return kept
+
+
 # Country tag whose release names a game, per UI language.
 LANGUAGE_REGION = {"de": "Germany", "fr": "France", "es": "Spain", "it": "Italy",
                    "nl": "Netherlands", "pt": "Brazil", "ja": "Japan"}
@@ -570,6 +590,10 @@ _GENERIC_STARTS = {"super", "the", "new", "my", "disney", "disneys", "classic", 
                    "pro", "world", "championship", "international", "ultimate", "mega", "real",
                    "little", "big", "great", "crazy", "battle", "power", "space", "star", "jurassic"}
 _ROMAN = {"ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", "xi", "xii"}
+# Games named after a person whose first name is also a series ("Mario Andretti
+# Racing" is no Mario game): never part of the one-word series.
+_PEOPLE = {"mario andretti", "mario lemieux", "michael jordan", "michael jackson",
+           "james bond", "james pond", "john madden", "tony hawk", "tony hawks"}
 _COMPILATION = re.compile(r"\b(\d+\s*(games\s*)?in\s*1|double\s*pack|combo\s*pack|compilation|"
                           r"collection|2-pack|triple\s*pack)\b|\s\+\s", re.I)
 
@@ -617,7 +641,7 @@ def series(titles: list[str]) -> dict[str, str]:
         chosen = None
         for k in range(1, len(words) + 1):  # a whole other title's main part: "Pokemon"
             prefix = tuple(words[:k])
-            if k == 1 and prefix[0] in _GENERIC_STARTS:
+            if k == 1 and (prefix[0] in _GENERIC_STARTS or " ".join(words[:2]) in _PEOPLE):
                 continue
             if prefix in full and counts[prefix] >= 2:
                 chosen = prefix

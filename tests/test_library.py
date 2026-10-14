@@ -89,3 +89,19 @@ def test_revisions_count_as_owning_the_game(monkeypatch):
                               release="Pokemon - Rubin-Edition (Germany) (Rev 1)")
     library.mark_owned(games, [rev1])
     assert games[0].owned
+
+
+def test_other_regions_versions_count_as_owned():
+    from vcinject import systems
+
+    gba = systems.SYSTEMS["gba"]
+    kart = library.CatalogGame("Mario Kart - Super Circuit",
+                               ["Mario Kart - Super Circuit (Europe)", "Mario Kart - Super Circuit (USA)"],
+                               gba)
+    usa_only = library.CatalogGame("Some Game", ["Some Game (USA)"], gba)
+    owned_usa = library.CatalogGame("Mario Party Advance", ["Mario Party Advance (USA)"], gba)
+    roms = [library.LibraryRom(Path(f"{n}.gba"), gba, 1, release=n)
+            for n in ("Mario Kart - Super Circuit (USA)", "Mario Party Advance (USA)")]
+    kept = library.for_region([kart, usa_only, owned_usa], roms, ("Europe", "Germany"))
+    assert [g.title for g in kept] == ["Mario Kart - Super Circuit", "Mario Party Advance"]
+    assert all(g.owned for g in kept)  # neither shows up as missing
