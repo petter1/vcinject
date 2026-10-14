@@ -188,21 +188,26 @@ def thumbnail_url(name: str, kind: str, system: str = SYSTEM) -> str:
                              name=urllib.parse.quote(_THUMB_UNSAFE.sub("_", name)))
 
 
-def fetch_image(name: str, kind: str, system: str = SYSTEM) -> Image.Image | None:
+def fetch_image(name: str, kind: str, system: str = SYSTEM,
+                refresh: bool = False) -> Image.Image | None:
+    """An image from the thumbnail server, cached on disk. ``refresh`` downloads it
+    again (e.g. when a cover was replaced or added upstream)."""
     folder = _cache_dir() if system == SYSTEM else _cache_dir() / system
     cache = folder / KINDS[kind] / f"{_THUMB_UNSAFE.sub('_', name)}.png"
     missing = cache.with_suffix(".missing")
-    if cache.is_file():
+    if cache.is_file() and not refresh:
         data = cache.read_bytes()
-    elif missing.is_file() and time.time() - missing.stat().st_mtime < _DAT_MAX_AGE:
+    elif missing.is_file() and not refresh:
         return None
     else:
         data = _download(thumbnail_url(name, kind, system))
         cache.parent.mkdir(parents=True, exist_ok=True)
         if data is None:
             missing.touch()
+            cache.unlink(missing_ok=True)
             return None
         cache.write_bytes(data)
+        missing.unlink(missing_ok=True)
     try:
         with Image.open(io.BytesIO(data)) as img:
             img.load()
@@ -267,15 +272,15 @@ def _system_key(database: str) -> str | None:
     return next((s.key for s in systems.SYSTEMS.values() if s.database == database), None)
 
 
-def nexus_cover(titles: list[str], system: str = SYSTEM):
+def nexus_cover(titles: list[str], system: str = SYSTEM, refresh: bool = False):
     """(game, box art) from RetroGamesNexus, or (None, None). Never raises."""
     from . import nexus
     key = _system_key(system)
     if not key:
         return None, None
     try:
-        game = nexus.find([t for t in titles if t], key)
-        return (game, nexus.cover(game)) if game else (None, None)
+        game = nexus.find([t for t in titles if t], key, refresh=refresh)
+        return (game, nexus.cover(game, refresh=refresh)) if game else (None, None)
     except InjectError:
         return None, None
 

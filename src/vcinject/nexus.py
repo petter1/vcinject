@@ -55,12 +55,15 @@ def _get(url: str) -> bytes | None:
     return _download(url)
 
 
-def _cached(path: Path, url: str) -> bytes | None:
-    """``url`` through a file cache; None when the page does not exist."""
+def _cached(path: Path, url: str, refresh: bool = False,
+            max_age: float | None = None) -> bytes | None:
+    """``url`` through a file cache; None when the page does not exist.
+    ``refresh`` downloads it again; ``max_age`` lets old copies expire."""
     missing = path.with_name(path.name + ".missing")
-    if path.is_file() and time.time() - path.stat().st_mtime < _MAX_AGE:
+    fresh = lambda p: max_age is None or time.time() - p.stat().st_mtime < max_age
+    if not refresh and path.is_file() and fresh(path):
         return path.read_bytes()
-    if missing.is_file() and time.time() - missing.stat().st_mtime < _MAX_AGE:
+    if not refresh and missing.is_file() and fresh(missing):
         return None
     try:
         data = _get(url)
@@ -73,6 +76,7 @@ def _cached(path: Path, url: str) -> bytes | None:
         missing.touch()
         return None
     path.write_bytes(data)
+    missing.unlink(missing_ok=True)
     return data
 
 
@@ -89,7 +93,8 @@ def words(title: str) -> list[str]:
 
 def slugs() -> list[str]:
     """Every game page on the site (from its sitemap)."""
-    data = _cached(_cache_dir() / "sitemap.xml", f"{BASE}/sitemap.xml") or b""
+    # the list of games is refreshed like the other game lists, monthly
+    data = _cached(_cache_dir() / "sitemap.xml", f"{BASE}/sitemap.xml", max_age=_MAX_AGE) or b""
     found = re.findall(rb"<loc>https://retrogamesnexus\.com/games/([a-z0-9-]+)</loc>", data)
     return sorted({s.decode() for s in found})
 
@@ -113,8 +118,8 @@ def candidates(title: str, all_slugs: list[str]) -> list[tuple[float, str]]:
     return sorted(scored, key=lambda s: (-s[0], len(s[1])))
 
 
-def game(slug: str) -> Game | None:
-    page = _cached(_cache_dir() / "pages" / f"{slug}.html", f"{BASE}/games/{slug}")
+def game(slug: str, refresh: bool = False) -> Game | None:
+    page = _cached(_cache_dir() / "pages" / f"{slug}.html", f"{BASE}/games/{slug}", refresh)
     if not page:
         return None
     html = page.decode("utf-8", "replace")
@@ -142,7 +147,7 @@ def game(slug: str) -> Game | None:
     return None
 
 
-def find(titles: list[str], system_key: str) -> Game | None:
+def find(titles: list[str], system_key: str, refresh: bool = False) -> Game | None:
     """The site's page for the first of ``titles`` it knows on that console."""
     platform = PLATFORMS.get(system_key)
     if not platform:
@@ -154,17 +159,18 @@ def find(titles: list[str], system_key: str) -> Game | None:
             if slug in seen:
                 continue
             seen.add(slug)
-            found = game(slug)
+            found = game(slug, refresh)
             if found and found.platform == platform:
                 return found
     return None
 
 
-def cover(found: Game) -> Image.Image | None:
+def cover(found: Game, refresh: bool = False) -> Image.Image | None:
     if not found.image_url:
         return None
     suffix = Path(found.image_url).suffix or ".img"
-    data = _cached(_cache_dir() / "covers" / found.platform / f"{found.slug}{suffix}", found.image_url)
+    data = _cached(_cache_dir() / "covers" / found.platform / f"{found.slug}{suffix}",
+                   found.image_url, refresh)
     if not data:
         return None
     try:

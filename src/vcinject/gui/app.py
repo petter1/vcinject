@@ -653,6 +653,7 @@ class MainWindow(QMainWindow):
         self.library.rom_install.connect(self.install_from_library)
         self.library.open_window.connect(self.open_library_window)
         self.library.rom_renamed.connect(self._rom_renamed)
+        self.library.rom_refreshed.connect(self._rom_refreshed)
         self.drop.versions.currentIndexChanged.connect(
             lambda: self.drop.versions.currentData() and self.load_rom(self.drop.versions.currentData()))
         self.drop.duplicates.clicked.connect(self.show_duplicates)
@@ -722,6 +723,11 @@ class MainWindow(QMainWindow):
             self.load_rom(dialog.path)
         elif self.rom_path is not None:
             self._show_versions(self.rom_path)
+
+    def _rom_refreshed(self, path: Path):
+        """The library checked the open ROM online again: show what it found."""
+        if path == self.rom_path and not self._busy:
+            self.lookup_artwork()
 
     def _rom_renamed(self, old: Path, new: Path):
         if self.rom_path == old:

@@ -146,9 +146,12 @@ upload it.
    in the library does all of this in one go.
 
 The library remembers what it found out about each file – release, year,
-checksum and a small cover – like the game lists for 30 days. Unchanged files
-appear instantly on the next start without being read again; renamed or moved
-files are recognised by their checksum.
+checksum and a small cover – so unchanged files appear instantly on the next
+start without being read again; renamed or moved files are recognised by their
+checksum. Nothing expires: selecting a ROM checks it online again in the
+background (once per session, can be switched off in the **↻** menu),
+right-click → *Reload cover and info* does it on demand, and **↻ → Reload all
+covers and info** refreshes the whole library.
 
 **Show missing games** in the library lists every game of the system from the
 No-Intro database below your ROMs, with a region filter and an

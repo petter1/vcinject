@@ -91,12 +91,12 @@ def scan(root: Path) -> list[LibraryRom]:
 
 # --- index: what was found out about each file, so the next start is instant ------------
 #
-# Like the game lists, results are kept for 30 days: a file that has not changed
-# (same size and time) is shown at once with its cover, without reading it. A
-# renamed or moved file is recognised by its checksum. Covers are kept as small
-# pictures next to the index.
+# A file that has not changed (same size and time) is shown at once with its
+# cover, without reading it; a renamed or moved file is recognised by its
+# checksum. Covers are kept as small pictures next to the index. Nothing
+# expires: refresh() checks a ROM online again (the GUI does that when a ROM is
+# selected, and on request for the whole library).
 
-_INDEX_MAX_AGE = 30 * 24 * 3600
 THUMB = 256  # pixels; large enough for the grid and Cover Flow
 _index: dict | None = None
 _index_lock = threading.Lock()
@@ -160,17 +160,14 @@ def _save_thumb(name: str, image: Image.Image) -> None:
 _FIELDS = ("sha1", "release", "method", "family", "year")
 
 
-def from_index(rom: LibraryRom, max_age: float | None = _INDEX_MAX_AGE) -> bool:
-    """Fill ``rom`` from the index when its file is unchanged (and the entry is
-    younger than ``max_age``). Returns True when it was."""
+def from_index(rom: LibraryRom) -> bool:
+    """Fill ``rom`` from the index when its file is unchanged. Returns True when it was."""
     try:
         stat = rom.path.stat()
     except OSError:
         return False
     record = _load_index()["files"].get(str(rom.path))
     if not record or record.get("size") != stat.st_size or record.get("mtime") != stat.st_mtime:
-        return False
-    if max_age is not None and time.time() - record.get("checked", 0) > max_age:
         return False
     for name in _FIELDS:
         setattr(rom, name, record.get(name) or ("" if name in ("sha1", "method", "family") else None))
@@ -199,7 +196,7 @@ def _remember(rom: LibraryRom) -> None:
 def _by_checksum(sha1: str) -> dict | None:
     """An entry of the same data under another name (the file was renamed or moved)."""
     for record in _load_index()["files"].values():
-        if record.get("sha1") == sha1 and time.time() - record.get("checked", 0) < _INDEX_MAX_AGE:
+        if record.get("sha1") == sha1:
             return record
     return None
 
@@ -209,15 +206,17 @@ def _built(sha1: str) -> list:
                   key=lambda e: e.built_at)
 
 
-def analyze(rom: LibraryRom, online: bool = True, cover: bool = True) -> LibraryRom:
+def analyze(rom: LibraryRom, online: bool = True, cover: bool = True,
+            refresh: bool = False) -> LibraryRom:
     """Identify the ROM, look up its cover and whether it was built before.
-    Unchanged files come from the index without being read."""
-    if from_index(rom, max_age=_INDEX_MAX_AGE if online else None):
+    Unchanged files come from the index without being read, unless ``refresh``
+    asks to check everything online again."""
+    if not refresh and from_index(rom):
         return rom
     data = systems.read_rom(rom.path)
     rom.sha1 = hashlib.sha1(data).hexdigest()
     rom.built = _built(rom.sha1)
-    known = _by_checksum(rom.sha1)
+    known = None if refresh else _by_checksum(rom.sha1)
     if known is not None and (known.get("release") or not online):
         for name in _FIELDS[1:]:
             setattr(rom, name, known.get(name) or ("" if name in ("method", "family") else None))
@@ -232,7 +231,7 @@ def analyze(rom: LibraryRom, online: bool = True, cover: bool = True) -> Library
         match = db.identify(rom.system.strip_header(data), game_code, systems.rom_name(rom.path))
         if match and artwork.is_probably_hack(match, systems.rom_name(rom.path)):
             game, hack_cover = artwork.nexus_cover([plain_stem(systems.rom_name(rom.path))],
-                                                   rom.system.database)
+                                                   rom.system.database, refresh)
             if game:
                 match = None
                 rom.release, rom.year, rom.cover = game.name, game.year, hack_cover
@@ -245,36 +244,54 @@ def analyze(rom: LibraryRom, online: bool = True, cover: bool = True) -> Library
             rom.year = artwork._metadata("releaseyear", crcs, rom.system.database)
             if cover:
                 for name in (match.name, *db.siblings(match.name)[:3]):
-                    rom.cover = artwork.fetch_image(name, "boxart", rom.system.database)
+                    rom.cover = artwork.fetch_image(name, "boxart", rom.system.database, refresh)
                     if rom.cover is not None:
                         break
         if cover and rom.cover is None and not (rom.release and not match):  # hacks: RetroGamesNexus
             game, rom.cover = artwork.nexus_cover(
                 [match.name if match else None, plain_stem(systems.rom_name(rom.path))],
-                rom.system.database)
+                rom.system.database, refresh)
             if game and not match:
                 rom.release, rom.year, rom.method = game.name, game.year, "retrogamesnexus"
         if rom.cover is not None:
             rom.cover.thumbnail((THUMB, THUMB))
     except InjectError:
+        if refresh:
+            raise
         return rom  # offline: the library still lists the file, try again next time
     _remember(rom)
     return rom
 
 
-def catalog_cover(game: "CatalogGame") -> Image.Image | None:
+def refresh(rom: LibraryRom) -> bool:
+    """Check ``rom`` online again: release, year and cover are downloaded anew.
+    ``rom`` only changes when that worked (offline it keeps what it had)."""
+    fresh = LibraryRom(rom.path, rom.system, rom.size, rom.folder)
+    try:
+        analyze(fresh, refresh=True)
+    except (InjectError, OSError):
+        return False
+    for name in ("sha1", "release", "year", "method", "family", "cover", "built"):
+        setattr(rom, name, getattr(fresh, name))
+    save_index()
+    return True
+
+
+def catalog_cover(game: "CatalogGame", refresh: bool = False) -> Image.Image | None:
     """Box art of a game from the catalog (missing games), as a small cached picture."""
     name = "missing-" + hashlib.sha1(f"{game.system.key}:{game.releases[0] if game.releases else game.title}"
                                      .encode()).hexdigest()
-    cover = _load_thumb(name)
+    cover = None if refresh else _load_thumb(name)
     if cover is not None:
         return cover
     for release in game.releases[:4]:
-        cover = artwork.fetch_image(release, "boxart", game.system.database)  # may raise offline
+        cover = artwork.fetch_image(release, "boxart", game.system.database, refresh)  # may raise
         if cover is not None:
             cover.thumbnail((THUMB, THUMB))
             _save_thumb(name, cover)
             return cover
+    if refresh:
+        _thumb_path(name).unlink(missing_ok=True)  # the cover is gone upstream
     return None
 
 

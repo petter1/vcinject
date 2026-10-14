@@ -53,3 +53,67 @@ def test_each_data_folder_has_its_own_index(tmp_path, monkeypatch):
     _identified(tmp_path / "game.gba")
     monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path / "two"))
     assert not library.from_index(library.LibraryRom(tmp_path / "game.gba", systems.SYSTEMS["gba"], 8))
+
+
+def test_index_entries_do_not_expire(tmp_path, monkeypatch):
+    monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path / "data"))
+    rom = _identified(tmp_path / "game.gba")
+    library._load_index()["files"][str(rom.path)]["checked"] = 0  # "years ago"
+    assert library.from_index(library.LibraryRom(rom.path, rom.system, 8))
+
+
+def test_refresh_downloads_again_and_keeps_old_data_offline(tmp_path, monkeypatch):
+    monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path / "data"))
+    rom = _identified(tmp_path / "game.gba")
+
+    def offline(*args, **kwargs):
+        raise InjectError("offline")
+
+    monkeypatch.setattr(artwork.ReleaseDatabase, "load", classmethod(offline))
+    assert not library.refresh(rom)
+    assert rom.release == "Game (Europe)" and rom.cover is not None
+
+    class Db:
+        serials = {}
+
+        def identify(self, *args):
+            return artwork.Match("Game (Europe) (Rev 1)", "crc")
+
+        def sibling_crcs(self, name):
+            return []
+
+        def siblings(self, name):
+            return []
+
+    asked = []
+    monkeypatch.setattr(artwork.ReleaseDatabase, "load", classmethod(lambda cls, **kw: Db()))
+    monkeypatch.setattr(artwork, "_metadata", lambda *a: "2004")
+    monkeypatch.setattr(artwork, "fetch_image",
+                        lambda name, kind, system, refresh=False: asked.append(refresh)
+                        or Image.new("RGB", (30, 40), "blue"))
+    assert library.refresh(rom)
+    assert (rom.release, rom.year, rom.cover.size) == ("Game (Europe) (Rev 1)", "2004", (30, 40))
+    assert asked == [True]  # the image was downloaded again, not taken from the cache
+    library._index = None
+    again = library.LibraryRom(rom.path, rom.system, 8)
+    assert library.from_index(again) and again.release == "Game (Europe) (Rev 1)"
+
+
+def test_fetch_image_refresh_bypasses_cache(tmp_path, monkeypatch):
+    monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path / "data"))
+    downloads = []
+
+    def download(url):
+        downloads.append(url)
+        image = Image.new("RGB", (4, 4), "green")
+        import io
+        out = io.BytesIO()
+        image.save(out, "PNG")
+        return out.getvalue()
+
+    monkeypatch.setattr(artwork, "_download", download)
+    artwork.fetch_image("Game (Europe)", "boxart")
+    artwork.fetch_image("Game (Europe)", "boxart")
+    assert len(downloads) == 1
+    artwork.fetch_image("Game (Europe)", "boxart", refresh=True)
+    assert len(downloads) == 2

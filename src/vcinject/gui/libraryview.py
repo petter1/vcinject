@@ -534,6 +534,9 @@ class LibraryPanel(QFrame):
     rom_install = Signal(object)         # Path, double-click: build and show the QR code
     open_window = Signal()               # "show the library in its own window"
     rom_renamed = Signal(object, object)  # old Path, new Path
+    rom_refreshed = Signal(object)        # Path: release and cover were checked online again
+    _refreshed_one = Signal(int, object)  # scan generation, LibraryRom
+    _reload_progress = Signal(int, int, int)  # scan generation, done, total
     _analysis_done = Signal(int)          # scan generation
     _analyzed = Signal(int, int, object)  # scan generation, index in roms, LibraryRom
     _catalog_ready = Signal(int, object)  # catalog generation, list[CatalogGame]
@@ -565,6 +568,10 @@ class LibraryPanel(QFrame):
         self._cover_queue: queue.Queue = queue.Queue()
         self._cover_requested: set[str] = set()
         threading.Thread(target=self._cover_worker, daemon=True).start()
+        self._refresh_queue: queue.Queue = queue.Queue()
+        self._checked_online: set[Path] = set()  # checked again this session
+        self._missing_refresh_gen = -1           # catalog generation whose covers reload
+        threading.Thread(target=self._refresh_worker, daemon=True).start()
         self.roms: list[library.LibraryRom] = []
         self._rows: dict[Path, int] = {}                 # path -> index in roms
         self._catalog: list[library.CatalogGame] = []
@@ -585,7 +592,20 @@ class LibraryPanel(QFrame):
         # --- controls ---
         title = QLabel("Library", objectName="cardTitle")
         choose = QPushButton("Folder…", clicked=self.choose_folder)
-        refresh = QToolButton(text="↻", clicked=self.rescan, toolTip="Scan again")
+        refresh = QToolButton(text="↻", clicked=self.rescan,
+                              toolTip="Scan the folder again (menu: reload covers)")
+        refresh.setPopupMode(QToolButton.MenuButtonPopup)
+        reload_menu = QMenu(refresh)
+        reload_menu.addAction("Scan folder again", self.rescan)
+        reload_menu.addAction("Reload all covers and info", self.reload_all)
+        reload_menu.addSeparator()
+        self.check_on_select = reload_menu.addAction("Check cover online when selecting a ROM")
+        self.check_on_select.setCheckable(True)
+        self.check_on_select.setChecked(self.settings.value("library/check_on_select", True,
+                                                            type=bool))
+        self.check_on_select.toggled.connect(
+            lambda on: self.settings.setValue("library/check_on_select", on))
+        refresh.setMenu(reload_menu)
         zip_roms = QToolButton(text="Zip", clicked=self.zip_roms,
                                toolTip="Pack every unzipped ROM into its own .zip "
                                        "(saves space, vcinject reads zips)")
@@ -723,6 +743,8 @@ class LibraryPanel(QFrame):
         self._catalog_ready.connect(self._show_catalog)
         self._cover_ready.connect(self._set_missing_cover)
         self._analysis_done.connect(self._after_analysis)
+        self._refreshed_one.connect(self._after_refresh)
+        self._reload_progress.connect(self._show_reload_progress)
 
         folder = self.settings.value("library/folder", "")
         if folder and Path(folder).is_dir():
@@ -1137,6 +1159,8 @@ class LibraryPanel(QFrame):
         entry = self._current
         if entry is not None and entry.kind == "rom":  # "missing" entries have no file
             self.rom_chosen.emit(entry.path)
+            if self.check_on_select.isChecked() and entry.path not in self._checked_online:
+                self.check_online(entry.path)
 
     def select(self, path: Path):
         """Highlight a ROM opened elsewhere (e.g. dropped) without reopening it."""
@@ -1162,11 +1186,16 @@ class LibraryPanel(QFrame):
                            lambda: self._toggle_stack(entry.key, not entry.expanded))
             menu.exec(global_pos)
             return
+        if entry.kind == "missing":
+            menu.addAction("Reload cover", lambda: self._reload_missing_cover(entry))
+            menu.exec(global_pos)
+            return
         if entry.kind != "rom":
             return
         rom = entry.rom
         menu.addAction("Open", lambda: self.rom_chosen.emit(rom.path))
         menu.addAction("Build and install via QR", lambda: self.rom_install.emit(rom.path))
+        menu.addAction("Reload cover and info", lambda: self.check_online(rom.path))
         menu.addSeparator()
         mark = menu.addAction("Self-dumped (from my own cartridge)",
                               lambda: self.toggle_self_dumped(rom.path))
@@ -1185,6 +1214,61 @@ class LibraryPanel(QFrame):
         menu.addAction("Show in folder",
                        lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(rom.path.parent))))
         menu.exec(global_pos)
+
+    # --- checking online again ------------------------------------------------------
+
+    def check_online(self, path: Path):
+        """Look the ROM up online again in the background (release, year, cover)."""
+        self._checked_online.add(Path(path))
+        self._refresh_queue.put((self._generation, Path(path)))
+
+    def _refresh_worker(self):
+        while True:
+            generation, path = self._refresh_queue.get()
+            if generation == -1:  # whole library
+                self._reload_all_work(path)
+                continue
+            index = self._rows.get(path)
+            if generation != self._generation or index is None:
+                continue
+            rom = self.roms[index]
+            if library.refresh(rom):
+                self._refreshed_one.emit(generation, rom)
+
+    def _after_refresh(self, generation: int, rom: library.LibraryRom):
+        if generation == self._generation:
+            self._schedule()
+            self.rom_refreshed.emit(rom.path)
+
+    def reload_all(self):
+        """Download release data and covers of the whole library again."""
+        self._checked_online |= {rom.path for rom in self.roms}
+        self._refresh_queue.put((-1, (self._generation, list(self.roms))))
+        # covers of missing games: reload what is on screen, the rest when it shows up
+        self._missing_refresh_gen = self._catalog_generation
+        self._missing_covers = {}
+        self._cover_requested = set()
+        self._icons = {}
+        self._visible_timer.start()
+
+    def _reload_all_work(self, job):
+        generation, roms = job
+        for done, rom in enumerate(roms, 1):
+            if generation != self._generation:
+                return
+            if library.refresh(rom):
+                self._refreshed_one.emit(generation, rom)
+            self._reload_progress.emit(generation, done, len(roms))
+
+    def _show_reload_progress(self, generation: int, done: int, total: int):
+        if generation == self._generation:
+            self._update_count()
+            if done < total:
+                self.count.setText(self.count.text() + f"\nReloading covers… {done} of {total}")
+
+    def _reload_missing_cover(self, entry: Entry):
+        self._missing_covers.pop(entry.key, None)
+        self._cover_queue.put((self._catalog_generation, entry.key, entry.game, True))
 
     # --- files: zip, rename, self-dumped, remove -------------------------------------
 
@@ -1366,15 +1450,16 @@ class LibraryPanel(QFrame):
             for item in (entry.children[:3] if entry.kind == "stack" else [entry]):
                 if item.kind == "missing" and item.key not in self._cover_requested:
                     self._cover_requested.add(item.key)
-                    self._cover_queue.put((self._catalog_generation, item.key, item.game))
+                    self._cover_queue.put((self._catalog_generation, item.key, item.game,
+                                           self._catalog_generation == self._missing_refresh_gen))
 
     def _cover_worker(self):
         while True:
-            generation, key, game = self._cover_queue.get()
+            generation, key, game, reload = self._cover_queue.get()
             if generation != self._catalog_generation:
                 continue  # list changed meanwhile
             try:
-                cover = library.catalog_cover(game)
+                cover = library.catalog_cover(game, refresh=reload)
             except InjectError:
                 continue  # offline
             if cover is not None:
@@ -1493,6 +1578,7 @@ class LibraryWindow(QMainWindow):
         self.panel.rom_chosen.connect(main.load_rom)
         self.panel.rom_install.connect(main.install_from_library)
         self.panel.rom_renamed.connect(main._rom_renamed)
+        self.panel.rom_refreshed.connect(main._rom_refreshed)
         self.setCentralWidget(self.panel)
         self.resize(1100, 780)
 
