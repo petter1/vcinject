@@ -189,6 +189,11 @@ into one entry ("3 versions"); the version menu under the ROM picks which one
 to build. Copies of the same release are flagged – bit-identical or not – and
 **Versions and duplicates…** (right-click) moves the spare ones to the trash.
 
+**View options** (next to the search field) holds the filters, sorting and
+display settings in one window; a line under the search field sums up what is
+active. With *Version symbols on covers*, each cover shows the regions of the
+versions you have (DE, US/EU, JP …, DE×2 for two copies).
+
 **Sort and series:** sort by name, release year, system or folder. Series
 are recognised from the titles (e.g. all Pokémon games); the series menu
 filters by one (*Pokemon (5/7)* = owned/known) or by compilations. With

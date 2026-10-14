@@ -322,6 +322,32 @@ def _rom_size(path: Path) -> int:
     return Path(path).stat().st_size
 
 
+_REGION_CODES = {"Europe": "EU", "USA": "US", "Japan": "JP", "World": "W", "Germany": "DE",
+                 "France": "FR", "Spain": "ES", "Italy": "IT", "Netherlands": "NL", "Sweden": "SE",
+                 "Scandinavia": "SC", "UK": "UK", "Australia": "AU", "Korea": "KR", "China": "CN",
+                 "Brazil": "BR", "Canada": "CA", "Asia": "AS", "Taiwan": "TW", "Hong Kong": "HK",
+                 "Russia": "RU", "Denmark": "DK", "Norway": "NO", "Finland": "FI", "Portugal": "PT"}
+
+
+def region_code(release: str | None) -> str:
+    """Short region of a release: "(USA, Europe)" -> "US/EU", "(Germany)" -> "DE"."""
+    match = re.search(r"\(([^)]*)\)", release or "")
+    if not match:
+        return ""
+    codes = [_REGION_CODES.get(part.strip()) for part in match.group(1).split(",")]
+    return "/".join(c for c in codes if c)
+
+
+def version_codes(roms: list[LibraryRom]) -> list[str]:
+    """The regions of the versions of a game one has, with counts for copies:
+    ["DE×2", "US"]. ROMs that are not identified count as "?"."""
+    counts: dict[str, int] = {}
+    for rom in roms:
+        code = region_code(rom.release) or "?"
+        counts[code] = counts.get(code, 0) + 1
+    return [code + (f"×{n}" if n > 1 else "") for code, n in counts.items()]
+
+
 def dump_is_bad(rom: LibraryRom) -> bool:
     """The checksum matches no known good dump (and it is not a known ROM hack)."""
     return rom.verified in ("mismatch", "unknown") and rom.method != "retrogamesnexus"

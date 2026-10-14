@@ -105,3 +105,13 @@ def test_other_regions_versions_count_as_owned():
     kept = library.for_region([kart, usa_only, owned_usa], roms, ("Europe", "Germany"))
     assert [g.title for g in kept] == ["Mario Kart - Super Circuit", "Mario Party Advance"]
     assert all(g.owned for g in kept)  # neither shows up as missing
+
+
+def test_version_symbols():
+    from vcinject import systems
+
+    gba = systems.SYSTEMS["gba"]
+    rom = lambda release: library.LibraryRom(Path("x.gba"), gba, 1, release=release)
+    assert library.region_code("Pokemon - Ruby Version (USA, Europe) (Rev 1)") == "US/EU"
+    assert library.version_codes([rom("A (Germany)"), rom("A (Germany) (Rev 1)"), rom("A (USA)"),
+                                  rom(None)]) == ["DE×2", "US", "?"]

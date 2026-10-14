@@ -22,6 +22,7 @@ from PySide6.QtGui import (QBrush, QColor, QDesktopServices, QFont, QIcon, QLine
                            QPen, QPixmap, QTransform)
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout,
+    QGroupBox,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListView, QListWidget, QListWidgetItem, QMainWindow,
     QMenu, QMessageBox, QProgressDialog, QPushButton, QScrollBar, QStackedWidget, QToolButton,
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
@@ -63,6 +64,7 @@ class Entry:
     crc: str = ""
     dump: str = ""
     dump_state: str = ""           # "good", "bad" (no known dump matches) or ""
+    versions: tuple = ()           # regions of the versions one has: ("DE×2", "US")
 
     @property
     def subtitle(self) -> str:
@@ -670,6 +672,11 @@ class LibraryPanel(QFrame):
         self.stacks.setToolTip("Show the games of a series as one stack; click it to open it")
         self.stacks.setChecked(self.settings.value("library/stacks", False, type=bool))
         self.stacks.toggled.connect(self._options_changed)
+        self.badges = QCheckBox("Version symbols on covers")
+        self.badges.setToolTip("Show on each cover which versions you have (DE, US, EU …; "
+                               "×2 for copies)")
+        self.badges.setChecked(self.settings.value("library/badges", True, type=bool))
+        self.badges.toggled.connect(self._options_changed)
         self.show_missing = QCheckBox("Show missing games")
         self.show_missing.setToolTip("List every game of the system from the No-Intro database "
                                      "and grey out the ones not in your folder")
@@ -677,37 +684,39 @@ class LibraryPanel(QFrame):
         self.owned_first.setToolTip("Off: missing games are sorted in between your own")
         self.owned_first.setChecked(self.settings.value("library/owned_first", True, type=bool))
         self.owned_first.toggled.connect(self._options_changed)
-        self.owned_first.setVisible(False)
-        self.show_missing.toggled.connect(self.owned_first.setVisible)
+        self.owned_first.setEnabled(False)
+        self.show_missing.toggled.connect(self.owned_first.setEnabled)
         self.collected_only = QCheckBox("Only series I own")
         self.collected_only.setToolTip("Hide missing games, except those of a series of which "
                                        "at least one game is in your folder")
         self.collected_only.setChecked(self.settings.value("library/collected_only", False, type=bool))
         self.collected_only.toggled.connect(self._options_changed)
-        self.collected_only.setVisible(False)
-        self.show_missing.toggled.connect(self.collected_only.setVisible)
+        self.collected_only.setEnabled(False)
+        self.show_missing.toggled.connect(self.collected_only.setEnabled)
         self.show_betas = QCheckBox("Betas && prototypes")
         self.show_betas.setToolTip("Also list games that were never released (only betas, "
                                    "prototypes or demos exist)")
         self.show_betas.setChecked(self.settings.value("library/betas", False, type=bool))
         self.show_betas.toggled.connect(
             lambda on: (self.settings.setValue("library/betas", on), self._catalog_timer.start()))
-        self.show_betas.setVisible(False)
-        self.show_missing.toggled.connect(self.show_betas.setVisible)
+        self.show_betas.setEnabled(False)
+        self.show_missing.toggled.connect(self.show_betas.setEnabled)
         self.region = QComboBox()
         for name in self.REGIONS:
             self.region.addItem(name)
-        self.region.setVisible(False)
-        self.show_missing.toggled.connect(self.region.setVisible)
+        self.region.setEnabled(False)
+        self.show_missing.toggled.connect(self.region.setEnabled)
         self.show_missing.toggled.connect(lambda: self._catalog_timer.start())
+        self.show_missing.toggled.connect(
+            lambda on: self.settings.setValue("library/show_missing", on))
         self.region.currentIndexChanged.connect(lambda: self._catalog_timer.start())
         self.missing_style = QComboBox()
         for key, label in self.MISSING_STYLES.items():
             self.missing_style.addItem(label, key)
         self.missing_style.setCurrentIndex(max(0, self.missing_style.findData(
             self.settings.value("library/missing_style", "greyed"))))
-        self.missing_style.setVisible(False)
-        self.show_missing.toggled.connect(self.missing_style.setVisible)
+        self.missing_style.setEnabled(False)
+        self.show_missing.toggled.connect(self.missing_style.setEnabled)
         self.missing_style.currentIndexChanged.connect(self._missing_style_changed)
         self._catalog_timer = QTimer(self, singleShot=True, interval=600,
                                      timeout=self._refresh_catalog)
@@ -736,45 +745,24 @@ class LibraryPanel(QFrame):
         self.view = self._views[self.view_choice.currentData() or "list"]
         self.views.setCurrentWidget(self.view)
 
+        # filters, sorting and display options live in their own window
+        self.options = LibraryOptions(self)
+        options_button = QToolButton(text="View options", clicked=self.show_options,
+                                     toolTip="Filters, sorting, series, missing games, symbols")
+        options_button.setIcon(tool_icon("options", self.palette().text().color()))
+        options_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.summary = QLabel(objectName="muted", wordWrap=True)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.addLayout(top)
         layout.addLayout(tools)
         layout.addWidget(self.folder_label)
-        if grid:  # filters in two rows above the view
-            row1 = QHBoxLayout()
-            for widget in (self.search, self.system_filter, self.series_filter, self.sort):
-                row1.addWidget(widget)
-            layout.addLayout(row1)
-            row2 = QHBoxLayout()
-            for widget in (self.stacks, self.show_missing, self.owned_first, self.collected_only,
-                           self.show_betas, self.region, self.missing_style):
-                row2.addWidget(widget)
-            row2.addStretch(1)
-            row2.addWidget(self.check_on_select)
-            row2.addStretch(1)
-            layout.addLayout(row2)
-        else:
-            layout.addWidget(self.search)
-            row = QHBoxLayout()
-            row.addWidget(self.system_filter, 1)
-            row.addWidget(self.series_filter, 1)
-            layout.addLayout(row)
-            row = QHBoxLayout()
-            row.addWidget(self.sort, 1)
-            row.addWidget(self.stacks)
-            layout.addLayout(row)
-            row = QHBoxLayout()
-            row.addWidget(self.show_missing)
-            row.addWidget(self.owned_first)
-            layout.addLayout(row)
-            row = QHBoxLayout()
-            row.addWidget(self.collected_only)
-            row.addWidget(self.show_betas)
-            layout.addLayout(row)
-            layout.addWidget(self.region)
-            layout.addWidget(self.missing_style)
-            layout.addWidget(self.check_on_select)
+        row = QHBoxLayout()
+        row.addWidget(self.search, 1)
+        row.addWidget(options_button)
+        layout.addLayout(row)
+        layout.addWidget(self.summary)
         layout.addWidget(self.views, 1)
         layout.addWidget(self.count)
         self._analyzed.connect(self._update_row)
@@ -784,6 +772,9 @@ class LibraryPanel(QFrame):
         self._refreshed_one.connect(self._after_refresh)
         self._reload_progress.connect(self._show_reload_progress)
 
+        if self.settings.value("library/show_missing", False, type=bool):
+            self.show_missing.setChecked(True)
+        self._update_summary()
         folder = self.settings.value("library/folder", "")
         if autoload and folder and Path(folder).is_dir():
             self.load(Path(folder))
@@ -905,6 +896,8 @@ class LibraryPanel(QFrame):
         self.settings.setValue("library/owned_first", self.owned_first.isChecked())
         self.settings.setValue("library/stacks", self.stacks.isChecked())
         self.settings.setValue("library/collected_only", self.collected_only.isChecked())
+        self.settings.setValue("library/badges", self.badges.isChecked())
+        self.settings.setValue("library/show_missing", self.show_missing.isChecked())
         self._refresh()
 
     def _refresh(self):
@@ -917,6 +910,7 @@ class LibraryPanel(QFrame):
         self._entries = self._build_entries()
         self.view.set_entries(self._entries)
         self._update_count()
+        self._update_summary()
 
     def _group_versions(self):
         """One entry per game: other versions and copies are folded into it."""
@@ -988,11 +982,16 @@ class LibraryPanel(QFrame):
         tip = [str(rom.path), " · ".join(details)] + ([f"Series: {series}"] if series else []) \
             + ([f"Dump: {dump}"] if dump else [])
         region = rom.release[len(rom.title):].strip() if rom.release else ""
+        group = self._group_of.get(index) or [rom]
+        versions = tuple(library.version_codes(sorted(group, key=lambda r: r is not rom)))
+        if self.badges.isChecked() and not self.grid:  # no room on small covers: in the text
+            details.insert(1, " ".join(versions))
         return Entry(f"rom:{rom.path}", "rom", rom.title, details, "\n".join(tip), rom.path, rom,
                      system=rom.system.key.upper(), year=rom.year or "", series=series,
                      release=region, folder=rom.folder, size=rom.size, status=" · ".join(status),
                      serial=rom.serial, crc=rom.crc, dump=dump,
-                     dump_state="bad" if bad else "good" if rom.verified == "good" else "")
+                     dump_state="bad" if bad else "good" if rom.verified == "good" else "",
+                     versions=versions)
 
     def _missing_entry(self, game: library.CatalogGame) -> Entry:
         details = [game.system.key.upper()] + ([game.year] if game.year else []) \
@@ -1102,6 +1101,27 @@ class LibraryPanel(QFrame):
         self.series_filter.setCurrentIndex(max(0, self.series_filter.findData(chosen)))
         self.series_filter.blockSignals(False)
 
+    def show_options(self):
+        self.options.show()
+        self.options.raise_()
+        self.options.activateWindow()
+
+    def _update_summary(self):
+        """The active filters and sorting in one line under the search field."""
+        parts = [self.system_filter.currentText(), self.sort.currentText().replace("Sort: ", "by ")]
+        if self.series_filter.currentData() is not None:
+            parts.insert(1, self.series_filter.currentText())
+        if self.stacks.isChecked():
+            parts.append("series grouped")
+        if self.show_missing.isChecked():
+            missing = f"missing shown ({self.region.currentText()}"
+            if self.collected_only.isChecked():
+                missing += ", only series I own"
+            if self.show_betas.isChecked():
+                missing += ", betas"
+            parts.append(missing + ")")
+        self.summary.setText(" · ".join(parts))
+
     def _update_count(self):
         system = self.system_filter.currentData()
         shown = sum(1 for e in self._all_entries() if e.kind == "rom")
@@ -1136,10 +1156,38 @@ class LibraryPanel(QFrame):
                 self._icons[key] = self._stack_pixmap(entry, size)
             return self._icons[key]
         raw = self._raw_cover(entry)
-        key = (entry.kind, entry.key, id(raw) if raw is not None else None, style, dims)
+        badges = entry.versions if self.badges.isChecked() and size.width() >= 80 else ()
+        key = (entry.kind, entry.key, id(raw) if raw is not None else None, style, dims, badges)
         if key not in self._icons:
-            self._icons[key] = self._pixmap(self._cover_of(entry), entry, size)
+            pix = self._pixmap(self._cover_of(entry), entry, size)
+            self._icons[key] = self._with_badges(pix, badges) if badges else pix
         return self._icons[key]
+
+    def _with_badges(self, pix: QPixmap, codes: tuple) -> QPixmap:
+        """Small region labels along the bottom of a cover: the versions one has."""
+        pix = QPixmap(pix)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.Antialiasing)
+        font = QFont(self.font())
+        font.setBold(True)
+        font.setPixelSize(max(9, pix.height() // 12))
+        p.setFont(font)
+        metrics = p.fontMetrics()
+        pad, gap = max(3, pix.height() // 50), 3
+        height = metrics.height() + pad
+        x, y = 4, pix.height() - height - 4
+        for code in codes:
+            width = metrics.horizontalAdvance(code) + pad * 2
+            if x + width > pix.width() - 4:
+                break
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(20, 22, 28, 200))
+            p.drawRoundedRect(QRectF(x, y, width, height), height / 3, height / 3)
+            p.setPen(QColor(255, 255, 255))
+            p.drawText(QRectF(x, y, width, height), Qt.AlignCenter, code)
+            x += width + gap
+        p.end()
+        return pix
 
     def _forget_icons(self, key: str):
         """Drop cached pictures of one entry (and of stacks showing it): its cover changed."""
@@ -1613,6 +1661,11 @@ def tool_icon(name: str, colour: QColor) -> QIcon:
         p.drawPolygon([QPointF(8, 20), QPointF(40, 20), QPointF(56, 32), QPointF(40, 44),
                        QPointF(8, 44)])
         p.drawLine(QPointF(15, 32), QPointF(32, 32))
+    elif name == "options":  # three sliders
+        for y, x in ((18, 22), (32, 42), (46, 28)):
+            p.drawLine(QPointF(8, y), QPointF(56, y))
+            p.setBrush(colour)
+            p.drawEllipse(QPointF(x, y), 5, 5)
     elif name == "zip":  # an archive box with a zipper
         p.drawRoundedRect(QRectF(12, 8, 40, 48), 4, 4)
         for y in (16, 24, 32):
@@ -1644,6 +1697,37 @@ def open_game_page(parent: QWidget, site: str, system: systems.System, release: 
 
 def _game_key(game: library.CatalogGame) -> str:
     return f"missing:{game.system.key}:{game.releases[0] if game.releases else game.title}"
+
+
+class LibraryOptions(QDialog):
+    """Filters, sorting and display options of one library view; changes apply at once."""
+
+    def __init__(self, panel: "LibraryPanel"):
+        super().__init__(panel)
+        self.setWindowTitle("Library view options")
+        self.setMinimumWidth(380)
+        layout = QVBoxLayout(self)
+
+        def group(title: str, *widgets):
+            box = QGroupBox(title)
+            inner = QVBoxLayout(box)
+            for widget in widgets:
+                inner.addWidget(widget)
+            layout.addWidget(box)
+            return inner
+
+        group("Show", panel.system_filter, panel.series_filter)
+        group("Order", panel.sort, panel.stacks, panel.badges)
+        missing = group("Missing games", panel.show_missing)
+        sub = QVBoxLayout()
+        sub.setContentsMargins(22, 0, 0, 0)  # options that need "Show missing games"
+        for widget in (panel.owned_first, panel.collected_only, panel.show_betas, panel.region,
+                       panel.missing_style):
+            sub.addWidget(widget)
+        missing.addLayout(sub)
+        group("Covers", panel.check_on_select)
+        close = QPushButton("Close", clicked=self.accept)
+        layout.addWidget(close, alignment=Qt.AlignRight)
 
 
 class VersionsDialog(QDialog):
