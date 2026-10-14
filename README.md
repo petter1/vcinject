@@ -37,7 +37,8 @@ Virtual Console injects for the **Wii** (WAD channels) and the **Wii U**
 - **Artwork and metadata automatically:** box art, title screens, logos,
   release year and publisher from the libretro databases, matched by checksum;
   ROM hacks and games missing there get their cover from
-  [RetroGamesNexus](https://retrogamesnexus.com).
+  [RetroGamesNexus](https://retrogamesnexus.com) – Pokémon hacks even when the
+  file name says nothing, by the name they show in their own text.
 - **GBA saves that work,** including 1 Mbit flash games like Pokémon
   Ruby/Sapphire/Emerald/FireRed/LeafGreen; save types are detected
   automatically.

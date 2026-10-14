@@ -17,7 +17,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from . import artwork, dumpdb, registry, systems
+from . import artwork, dumpdb, registry, romtext, systems
 from .errors import InjectError
 from .template import data_dir
 
@@ -44,6 +44,7 @@ class LibraryRom:
     header_sha1: str = ""                  # SHA-1 of the header (FlashGBX looks carts up by it)
     verified: str = ""                     # "good", "mismatch", "unknown" or "" (not checked)
     verified_by: str = ""                  # "No-Intro", "FlashGBX" or both
+    text_checked: bool = False             # a hack's own text was searched for its name
 
     @property
     def title(self) -> str:
@@ -169,7 +170,7 @@ def _save_thumb(name: str, image: Image.Image) -> None:
 
 
 _FIELDS = ("sha1", "release", "method", "family", "year", "crc", "serial", "dump_sha1",
-           "dump_size", "header_sha1", "verified", "verified_by")
+           "dump_size", "header_sha1", "verified", "verified_by", "text_checked")
 _TEXT_FIELDS = ("sha1", "method", "family", "crc", "serial", "dump_sha1", "verified",
                 "verified_by")  # "" rather than None
 
@@ -269,6 +270,8 @@ def verify_data(path: Path, system: systems.System, data: bytes) -> LibraryRom:
 def fix_hack(rom: LibraryRom) -> bool:
     """A ROM hack indexed as its base game (by an older version): identify it
     again. Returns True when it changed."""
+    if rom.method == "hack" and not rom.text_checked and rom.serial[:3] in romtext.GEN3_POKEMON:
+        return refresh(rom)  # unnamed hack from before hacks were looked for by their text
     if rom.method != "serial" or not rom.release:
         return False
     if not artwork.is_probably_hack(artwork.Match(rom.release, "serial"), systems.rom_name(rom.path)):
@@ -393,6 +396,11 @@ def _identify(rom: LibraryRom, cover: bool = True, refresh: bool = False) -> Non
             game, hack_cover = artwork.nexus_cover([plain_stem(systems.rom_name(rom.path))],
                                                    rom.system.database, refresh,
                                                    context=match.name)
+            if game is None and rom.serial[:3] in romtext.GEN3_POKEMON:
+                # the file name says nothing: Pokémon hacks usually name themselves
+                game, hack_cover = artwork.nexus_from_rom_text(systems.read_rom(rom.path),
+                                                               rom.system.database, refresh)
+                rom.text_checked = True
             match = None
             if game:
                 rom.release, rom.year, rom.cover = game.name, game.year, hack_cover
@@ -448,7 +456,8 @@ def refresh(rom: LibraryRom) -> bool:
     except (InjectError, OSError, ValueError, zipfile.BadZipFile):
         return False
     for name in ("sha1", "release", "year", "method", "family", "crc", "serial", "dump_sha1",
-                 "dump_size", "header_sha1", "verified", "verified_by", "cover", "built"):
+                 "dump_size", "header_sha1", "verified", "verified_by", "text_checked", "cover",
+                 "built"):
         setattr(rom, name, getattr(fresh, name))
     save_index()
     return True

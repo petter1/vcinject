@@ -311,7 +311,8 @@ def lookup(rom: bytes, game_code: str = "", filename: str = "",
     if match is None or is_probably_hack(match, filename):
         # a ROM hack is never shown as its base game, found on RetroGamesNexus or not
         context = match.name if match else ""
-        return nexus_artwork(filename, system, context=context) if "boxart" in kinds else Artwork()
+        return nexus_artwork(filename, system, context=context, rom=rom) \
+            if "boxart" in kinds else Artwork()
     images = {}
     for kind in kinds:
         image = fetch_image(match.name, kind, system)
@@ -374,11 +375,27 @@ def nexus_cover(titles: list[str], system: str = SYSTEM, refresh: bool = False,
         return None, None
 
 
+def nexus_from_rom_text(rom: bytes, system: str = SYSTEM, refresh: bool = False):
+    """(game, box art) for a Pokémon ROM hack named in its own text, or (None, None)."""
+    from . import nexus, romtext
+    key = _system_key(system)
+    if key != "gba" or not romtext.is_gen3_pokemon(rom):
+        return None, None
+    try:
+        game = nexus.find_in_text(romtext.gen3_text(rom), key, refresh=refresh)
+        return (game, nexus.cover(game, refresh=refresh)) if game else (None, None)
+    except InjectError:
+        return None, None
+
+
 def nexus_artwork(filename: str, system: str = SYSTEM, known: str | None = None,
-                  context: str = "") -> Artwork:
-    """Box art, name and year from RetroGamesNexus (fallback, mostly ROM hacks)."""
+                  context: str = "", rom: bytes | None = None) -> Artwork:
+    """Box art, name and year from RetroGamesNexus (fallback, mostly ROM hacks);
+    with ``rom``, a hack whose file name says nothing is looked for by its text."""
     game, image = nexus_cover([known, Path(filename).stem if filename else None], system,
                               context=context)
+    if game is None and rom is not None and context:
+        game, image = nexus_from_rom_text(rom, system)
     if game is None or image is None:
         return Artwork()
     return Artwork(Match(game.name, "retrogamesnexus"), {"boxart": image}, year=game.year,

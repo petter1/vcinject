@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import difflib
 import io
+import math
 import json
 import re
 import unicodedata
@@ -121,6 +122,38 @@ def candidates(title: str, all_slugs: list[str],
         if score >= _MIN_SCORE:
             scored.append((score, slug))
     return sorted(scored, key=lambda s: (-s[0], len(s[1])))
+
+
+_FILL = r"(?:\s+(?:gba|the|and|of|a|version|edition))?"
+
+
+def find_in_text(text: str, system_key: str, prefix: str = "pokemon",
+                 refresh: bool = False) -> Game | None:
+    """A game whose title appears in ``text`` (a ROM's own text, see romtext).
+
+    Only titles starting with ``prefix`` and of at least two more words count;
+    they must appear as a phrase (small words like "GBA" may sit in between).
+    Longer and more frequent titles win: a hack names itself again and again."""
+    platform = PLATFORMS.get(system_key)
+    if not platform or not text:
+        return None
+    scored = []
+    for slug in slugs():
+        parts = slug.split("-")
+        if parts[0] != prefix:
+            continue
+        words = parts[1:]
+        if len([w for w in words if w not in ("and", "the", "of", "a")]) < 2:
+            continue
+        pattern = r"\b" + (_FILL + r"\s+").join(re.escape(w) for w in words) + r"\b"
+        count = len(re.findall(pattern, text))
+        if count:
+            scored.append((len(words) * math.log(1 + count), slug))
+    for _score, slug in sorted(scored, reverse=True)[:5]:
+        found = game(slug, refresh)
+        if found and found.platform == platform:
+            return found
+    return None
 
 
 def game(slug: str, refresh: bool = False) -> Game | None:

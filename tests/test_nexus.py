@@ -121,3 +121,39 @@ def test_unlisted_hack_is_never_its_base_game(monkeypatch, tmp_path):
     assert rom.release is None and rom.method == "hack" and rom.family == ""
     assert rom.title == "My Own Hack v2" and library.verified_label(rom) == "ROM hack"
     assert not library.dump_is_bad(rom)
+
+
+def _gen3(text: str) -> bytes:
+    out = bytearray()
+    for char in text:
+        if char == " ":
+            out.append(0x00)
+        elif char.isdigit():
+            out.append(0xA1 + int(char))
+        elif char.isupper():
+            out.append(0xBB + ord(char) - ord("A"))
+        elif char.islower():
+            out.append(0xD5 + ord(char) - ord("a"))
+        else:
+            out.append({"!": 0xAB, "'": 0xB4}[char])
+    return bytes(out) + b"\xff"
+
+
+def test_pokemon_hack_named_in_its_own_text(monkeypatch, tmp_path):
+    from vcinject import romtext
+
+    _site(monkeypatch, tmp_path)
+    monkeypatch.setattr(nexus, "slugs", lambda: ["pokemon-sword-shield", "pokemon-clover",
+                                                 "pokemon-sword-and-shield-ultimate"])
+    found = {"pokemon-sword-and-shield-ultimate": nexus.Game("Pokemon Sword and Shield Ultimate",
+                                                             "pokemon-sword-and-shield-ultimate",
+                                                             "gba", "2023", None, None)}
+    monkeypatch.setattr(nexus, "game", lambda slug, refresh=False: found.get(slug))
+    rom = bytearray(0x200)
+    rom[0xA0:0xB0] = b"POKEMON FIREBPRE"
+    rom += _gen3("Welcome to Sword and Shield GBA ULTIMATE!") * 3 + _gen3("Swords Dance")
+    assert romtext.is_gen3_pokemon(bytes(rom))
+    text = romtext.gen3_text(bytes(rom))
+    assert "welcome to sword and shield gba ultimate!" in text
+    assert nexus.find_in_text(text, "gba").slug == "pokemon-sword-and-shield-ultimate"
+    assert nexus.find_in_text(romtext.gen3_text(_gen3("Swords Dance and a shield")), "gba") is None
