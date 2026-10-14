@@ -537,7 +537,7 @@ class LibraryPanel(QFrame):
         top = QHBoxLayout()
         top.addWidget(title, 1)
         if not grid:
-            pop_out = QToolButton(text="⧉", clicked=self.open_window.emit,
+            pop_out = QToolButton(text="⧉", clicked=lambda: self.open_window.emit(),
                                   toolTip="Open the library in its own window")
             top.addWidget(pop_out)
         top.addWidget(zip_roms)
