@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
+import unicodedata
 import zipfile
 import zlib
 from dataclasses import dataclass, field
@@ -194,7 +196,9 @@ def catalog(system: systems.System, prefer: tuple[str, ...] = ()) -> list[Catalo
     games = []
     for releases in groups.values():
         releases.sort(key=lambda n: preferred_order(n, prefer))
-        games.append(CatalogGame(releases[0].split(" (", 1)[0], releases, system))
+        year = artwork._metadata("releaseyear", [c for n in releases for c in db.crcs.get(n, [])],
+                                 system.database)
+        games.append(CatalogGame(releases[0].split(" (", 1)[0], releases, system, year))
     return sorted(games, key=lambda g: g.title.lower())
 
 
@@ -205,3 +209,71 @@ def mark_owned(games: list[CatalogGame], roms: list[LibraryRom]) -> int:
         game.owned = any(name in owned_names for name in game.releases)
         count += game.owned
     return count
+
+
+# --- series ("collections") and compilations ------------------------------------------
+
+# Words that start many unrelated titles: never a series on their own.
+_GENERIC_STARTS = {"super", "the", "new", "my", "disney", "disneys", "classic", "dr", "mr", "ms",
+                   "pro", "world", "championship", "international", "ultimate", "mega", "real",
+                   "little", "big", "great", "crazy", "battle", "power", "space", "star", "jurassic"}
+_ROMAN = {"ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", "xi", "xii"}
+_COMPILATION = re.compile(r"\b(\d+\s*(games\s*)?in\s*1|double\s*pack|combo\s*pack|compilation|"
+                          r"collection|2-pack|triple\s*pack)\b|\s\+\s", re.I)
+
+
+def is_compilation(title: str) -> bool:
+    """Several games on one cartridge ("2 Games in 1 - ...", "... Collection")."""
+    return bool(_COMPILATION.search(title))
+
+
+def _head_words(title: str) -> list[str]:
+    """Words of the main title (before " - " or ":"), without "The" and numbering."""
+    head = re.split(r"\s+-\s+|:\s", title.split(" (", 1)[0], maxsplit=1)[0]
+    head = re.sub(r",\s*the$", "", head, flags=re.I)  # "Legend of Zelda, The"
+    head = unicodedata.normalize("NFKD", head).encode("ascii", "ignore").decode().lower()
+    words = re.findall(r"[a-z0-9]+", head.replace("'", ""))
+    if words and words[0] == "the":
+        words = words[1:]
+    while len(words) > 1 and (words[-1].isdigit() or words[-1] in _ROMAN):
+        words = words[:-1]  # Sonic Advance 2 -> Sonic Advance
+    return words
+
+
+def series(titles: list[str]) -> dict[str, str]:
+    """Series of each title that belongs to one ("Pokemon - Emerald Version" and
+    "Pokemon Mystery Dungeon" -> "Pokemon"). Titles of no series are left out."""
+    heads = {t: _head_words(t) for t in titles}
+    full = {tuple(w) for w in heads.values() if w}
+    counts: dict[tuple, int] = {}
+    for words in heads.values():
+        for k in range(1, len(words) + 1):
+            counts[tuple(words[:k])] = counts.get(tuple(words[:k]), 0) + 1
+    display: dict[tuple, str] = {}
+    for title in titles:  # readable name of each start: the words as first written
+        head = re.split(r"\s+-\s+|:\s", title.split(" (", 1)[0], maxsplit=1)[0]
+        head = re.sub(r",\s*the$", "", head, flags=re.I)
+        written = [w for w in re.findall(r"[^\s]+", head) if re.search(r"[A-Za-z0-9]", w)]
+        if written and written[0].lower() == "the":
+            written = written[1:]
+        for k in range(1, min(len(written), len(heads[title])) + 1):
+            display.setdefault(tuple(heads[title][:k]), " ".join(written[:k]).strip(",:"))
+    result = {}
+    for title, words in heads.items():
+        chosen = None
+        for k in range(1, len(words) + 1):  # a whole other title's main part: "Pokemon"
+            prefix = tuple(words[:k])
+            if k == 1 and prefix[0] in _GENERIC_STARTS:
+                continue
+            if prefix in full and counts[prefix] >= 2:
+                chosen = prefix
+                break
+        if chosen is None:  # or the shortest specific start several titles share
+            for k in range(2, len(words) + 1):
+                prefix = tuple(words[:k])
+                if counts[prefix] >= 2 and not all(w in _GENERIC_STARTS for w in prefix):
+                    chosen = prefix
+                    break
+        if chosen:
+            result[title] = display.get(chosen) or " ".join(chosen).title()
+    return result

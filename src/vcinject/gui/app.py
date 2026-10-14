@@ -493,14 +493,24 @@ class QrPanel(QFrame):
 
 # --- main window ---------------------------------------------------------------
 
+SORT_ROLE = Qt.UserRole + 1
+
+
+class _SortItem(QListWidgetItem):
+    """List entry ordered by the key the library panel stores in SORT_ROLE."""
+
+    def __lt__(self, other):
+        return (self.data(SORT_ROLE) or ()) < (other.data(SORT_ROLE) or ())
+
+
 class LibraryPanel(QFrame):
     """ROM folder (incl. sub folders) as a clickable list with covers."""
     rom_chosen = Signal(object)          # Path
     rom_install = Signal(object)         # Path, double-click: build and show the QR code
     open_window = Signal()               # "show the library in its own window"
-    _analyzed = Signal(int, int, object)  # scan generation, row, LibraryRom
+    _analyzed = Signal(int, int, object)  # scan generation, index in roms, LibraryRom
     _catalog_ready = Signal(int, object)  # catalog generation, list[CatalogGame]
-    _cover_ready = Signal(int, int, object)  # catalog generation, row, PIL image
+    _cover_ready = Signal(int, int, object)  # catalog generation, index in missing, PIL image
 
     REGIONS = {
         "Europe": ("Europe", "Germany", "France", "Spain", "Italy", "UK", "World", "Netherlands",
@@ -514,6 +524,9 @@ class LibraryPanel(QFrame):
     GRID_ICON = QSize(110, 140)
     GRID_CELL = QSize(160, 200)
     MISSING_STYLES = {"greyed": "Missing: greyed out", "bw": "Missing: black & white"}
+    SORTS = {"name": "Sort: Name", "series": "Sort: Series", "year": "Sort: Release year",
+             "system": "Sort: System", "folder": "Sort: Folder"}
+    COMPILATIONS = "\x00compilations"  # series filter entry for multi-game cartridges
 
     def __init__(self, grid: bool = False):
         super().__init__(objectName="card")
@@ -521,13 +534,17 @@ class LibraryPanel(QFrame):
         if not grid:
             self.setFixedWidth(300)
         self.settings = gui_settings()
-        self._missing_covers: dict[int, Image.Image] = {}   # catalog row -> cover
+        self._missing_covers: dict[int, Image.Image] = {}   # index in _missing -> cover
         self._cover_queue: queue.Queue = queue.Queue()
         self._cover_requested: set[int] = set()
         threading.Thread(target=self._cover_worker, daemon=True).start()
         self.roms: list[library.LibraryRom] = []
+        self._rom_items: list[QListWidgetItem] = []      # same order as roms
+        self._missing: list[library.CatalogGame] = []    # missing games on display
+        self._missing_items: list[QListWidgetItem] = []  # same order as _missing
+        self._series: dict[str, str] = {}                # title -> series
         self._generation = 0
-        self._rows: dict[Path, int] = {}
+        self._rows: dict[Path, int] = {}                 # path -> index in roms
 
         title = QLabel("Library", objectName="cardTitle")
         choose = QPushButton("Folder…", clicked=self.choose_folder)
@@ -552,11 +569,28 @@ class LibraryPanel(QFrame):
         self.system_filter.addItem("All systems", None)
         for key, system in systems.SYSTEMS.items():
             self.system_filter.addItem(system.name, key)
-        self.system_filter.currentIndexChanged.connect(self._filter)
+        self.system_filter.currentIndexChanged.connect(lambda: self._regroup_timer.start())
         self.system_filter.currentIndexChanged.connect(lambda: self._catalog_timer.start())
+        self.sort = QComboBox()
+        for key, label in self.SORTS.items():
+            self.sort.addItem(label, key)
+        self.sort.setCurrentIndex(max(0, self.sort.findData(self.settings.value("library/sort",
+                                                                                "name"))))
+        self.sort.currentIndexChanged.connect(self._sort_changed)
+        self.series_filter = QComboBox()
+        self.series_filter.setToolTip("Series are recognised from the game titles "
+                                      "(e.g. all Pokémon games)")
+        self.series_filter.addItem("All series", None)
+        self.series_filter.currentIndexChanged.connect(self._filter)
         self.show_missing = QCheckBox("Show missing games (database)")
         self.show_missing.setToolTip("List every game of the system from the No-Intro database "
                                      "and grey out the ones not in your folder")
+        self.owned_first = QCheckBox("Owned games first")
+        self.owned_first.setToolTip("Off: missing games are sorted in between your own")
+        self.owned_first.setChecked(self.settings.value("library/owned_first", True, type=bool))
+        self.owned_first.toggled.connect(self._sort_changed)
+        self.owned_first.setVisible(False)
+        self.show_missing.toggled.connect(self.owned_first.setVisible)
         self.region = QComboBox()
         for name in self.REGIONS:
             self.region.addItem(name)
@@ -574,6 +608,8 @@ class LibraryPanel(QFrame):
         self.missing_style.currentIndexChanged.connect(self._missing_style_changed)
         self._catalog_timer = QTimer(self, singleShot=True, interval=600,
                                      timeout=self._refresh_catalog)
+        # series and order are worked out again shortly after ROMs were identified
+        self._regroup_timer = QTimer(self, singleShot=True, interval=300, timeout=self._regroup)
         self._catalog: list[library.CatalogGame] = []
         self._catalog_generation = 0
         self.list = QListWidget()
@@ -608,17 +644,25 @@ class LibraryPanel(QFrame):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.addLayout(top)
         layout.addWidget(self.folder_label)
-        if not grid:
-            layout.addWidget(self.search)
-            layout.addWidget(self.system_filter)
-        if grid:  # filters in one row above the grid
+        if grid:  # filters in two rows above the grid
             filters = QHBoxLayout()
-            for widget in (self.search, self.system_filter, self.show_missing, self.region,
-                           self.missing_style):
+            for widget in (self.search, self.system_filter, self.series_filter, self.sort):
                 filters.addWidget(widget)
             layout.addLayout(filters)
+            missing = QHBoxLayout()
+            for widget in (self.show_missing, self.owned_first, self.region, self.missing_style):
+                missing.addWidget(widget)
+            missing.addStretch(1)
+            layout.addLayout(missing)
         else:
+            layout.addWidget(self.search)
+            row = QHBoxLayout()
+            row.addWidget(self.system_filter, 1)
+            row.addWidget(self.series_filter, 1)
+            layout.addLayout(row)
+            layout.addWidget(self.sort)
             layout.addWidget(self.show_missing)
+            layout.addWidget(self.owned_first)
             layout.addWidget(self.region)
             layout.addWidget(self.missing_style)
         layout.addWidget(self.list, 1)
@@ -655,28 +699,32 @@ class LibraryPanel(QFrame):
             return
         self.folder_label.setText(str(folder))
         self.list.clear()
-        self._catalog = []
+        self._catalog, self._missing, self._missing_items = [], [], []
+        self._rom_items = []
         self._rows = {}
-        for row, rom in enumerate(self.roms):
-            item = QListWidgetItem()
+        for index, rom in enumerate(self.roms):
+            item = _SortItem()
             item.setData(Qt.UserRole, rom.path)
             item.setSizeHint(self.GRID_CELL if self.grid else QSize(0, 54))
             self.list.addItem(item)
-            self._rows[rom.path] = row
+            self._rom_items.append(item)
+            self._rows[rom.path] = index
             self._show(item, rom)
-        self._filter()
+        self._regroup()
+        if self.show_missing.isChecked():
+            self._catalog_timer.start()
         # Identify ROMs and fetch covers in the background, newest scan wins.
         roms = list(self.roms)
 
         def work():
-            for row, rom in enumerate(roms):
+            for index, rom in enumerate(roms):
                 if generation != self._generation:
                     return
                 try:
                     library.analyze(rom)
                 except Exception:  # unreadable file etc.: keep it listed as is
                     continue
-                self._analyzed.emit(generation, row, rom)
+                self._analyzed.emit(generation, index, rom)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -715,19 +763,19 @@ class LibraryPanel(QFrame):
 
     def refresh_rom(self, path: Path):
         """Re-check one ROM (e.g. after building it) without network access."""
-        row = self._rows.get(Path(path))
-        if row is None:
+        index = self._rows.get(Path(path))
+        if index is None:
             return
-        rom = self.roms[row]
+        rom = self.roms[index]
         library.analyze(rom, online=False)
-        self._show(self.list.item(row), rom)
+        self._show(self._rom_items[index], rom)
 
     # --- display -------------------------------------------------------------
 
-    def _update_row(self, generation: int, row: int, rom: library.LibraryRom):
-        if generation == self._generation and row < len(self.roms):
-            self._show(self.list.item(row), rom)
-            self._filter()
+    def _update_row(self, generation: int, index: int, rom: library.LibraryRom):
+        if generation == self._generation and index < len(self._rom_items):
+            self._show(self._rom_items[index], rom)
+            self._regroup_timer.start()
             if self.show_missing.isChecked():  # newly identified ROMs change what is owned
                 self._catalog_timer.start()
 
@@ -737,13 +785,21 @@ class LibraryPanel(QFrame):
             details.append(rom.folder)
         if rom.year:
             details.append(rom.year)
+        if library.is_compilation(rom.title):
+            details.append("compilation")
+        series = self._series.get(rom.title)
+        if series and self.sort.currentData() == "series":
+            details.insert(0, series)
         if rom.built:
             details.append(f"✓ built ({rom.built[-1].title_id:016X})")
         if self.grid:
             item.setText(rom.title + ("\n✓ built" if rom.built else ""))
         else:
             item.setText(f"{rom.title}\n{' · '.join(details)}")
-        item.setToolTip(f"{rom.path}\n{' · '.join(details)}")
+        tip = [str(rom.path), " · ".join(details)]
+        if series:
+            tip.append(f"Series: {series}")
+        item.setToolTip("\n".join(tip))
         if rom.cover is not None:
             item.setIcon(QPixmap.fromImage(to_qimage(rom.cover)))
         else:
@@ -758,43 +814,112 @@ class LibraryPanel(QFrame):
             p.end()
             item.setIcon(pix)
 
+    # --- order, series ("collections") and filters ----------------------------
+
+    def _sort_key(self, title: str, system_key: str, year: str | None, folder: str,
+                  owned: bool) -> tuple:
+        mode = self.sort.currentData()
+        series = self._series.get(title, "")
+        by = {"name": (),
+              "series": (0 if series else 1, series.lower()),
+              "year": (year or "9999",),
+              "system": (system_key,),
+              "folder": (folder.lower(),)}[mode]
+        first = (0 if owned else 1,) if self.owned_first.isChecked() else ()
+        return first + by + (title.lower(),)
+
+    def _regroup(self):
+        """Recognise series, refresh the series filter and put everything in order."""
+        titles = [rom.title for rom in self.roms] + [g.title for g in self._catalog]
+        self._series = library.series(titles)
+        self._fill_series_filter()
+        for rom, item in zip(self.roms, self._rom_items):
+            item.setData(SORT_ROLE, self._sort_key(rom.title, rom.system.key, rom.year,
+                                                   rom.folder, True))
+            if self.sort.currentData() == "series":
+                self._show(item, rom)
+        for game, item in zip(self._missing, self._missing_items):
+            item.setData(SORT_ROLE, self._sort_key(game.title, game.system.key, game.year, "",
+                                                   False))
+        current = self.list.currentItem()
+        self.list.sortItems(Qt.AscendingOrder)
+        if current is not None:
+            self.list.scrollToItem(current)
+        self._filter()
+
+    def _fill_series_filter(self):
+        chosen = self.series_filter.currentData()
+        owned: dict[str, int] = {}
+        total: dict[str, int] = {}
+        system = self.system_filter.currentData()
+        for title in {rom.title for rom in self.roms if system in (None, rom.system.key)}:
+            if title in self._series:
+                owned[self._series[title]] = owned.get(self._series[title], 0) + 1
+        for game in self._catalog:
+            if game.title in self._series:
+                total[self._series[game.title]] = total.get(self._series[game.title], 0) + 1
+        names = sorted(set(owned) | set(total), key=str.lower)
+        compilations = sum(library.is_compilation(rom.title) for rom in self.roms
+                           if system in (None, rom.system.key))
+        self.series_filter.blockSignals(True)
+        self.series_filter.clear()
+        self.series_filter.addItem("All series", None)
+        for name in names:
+            count = f"{owned.get(name, 0)}/{total[name]}" if name in total else str(owned[name])
+            self.series_filter.addItem(f"{name} ({count})", name)
+        if compilations:
+            self.series_filter.addItem(f"Compilations ({compilations})", self.COMPILATIONS)
+        self.series_filter.setCurrentIndex(max(0, self.series_filter.findData(chosen)))
+        self.series_filter.blockSignals(False)
+
+    def _sort_changed(self):
+        self.settings.setValue("library/sort", self.sort.currentData())
+        self.settings.setValue("library/owned_first", self.owned_first.isChecked())
+        for rom, item in zip(self.roms, self._rom_items):
+            self._show(item, rom)  # the series is shown while sorting by it
+        self._regroup()
+
+    def _in_series(self, title: str) -> bool:
+        wanted = self.series_filter.currentData()
+        if wanted is None:
+            return True
+        if wanted == self.COMPILATIONS:
+            return library.is_compilation(title)
+        return self._series.get(title) == wanted
+
     def _filter(self):
         text = self.search.text().strip().lower()
         system = self.system_filter.currentData()
         shown = 0
-        for row, rom in enumerate(self.roms):
-            visible = (system is None or rom.system.key == system) and (
-                not text or text in rom.title.lower() or text in rom.path.name.lower()
-                or text in rom.folder.lower())
-            self.list.item(row).setHidden(not visible)
+        for rom, item in zip(self.roms, self._rom_items):
+            visible = (system is None or rom.system.key == system) and self._in_series(rom.title) \
+                and (not text or text in rom.title.lower() or text in rom.path.name.lower()
+                     or text in rom.folder.lower())
+            item.setHidden(not visible)
             shown += visible
-        for offset, game in enumerate(self._catalog_missing()):
-            item = self.list.item(len(self.roms) + offset)
-            if item is not None:
-                item.setHidden(bool(text) and text not in game.title.lower())
+        for game, item in zip(self._missing, self._missing_items):
+            item.setHidden((bool(text) and text not in game.title.lower())
+                           or not self._in_series(game.title))
         built = sum(1 for rom in self.roms if rom.built)
         summary = f"{shown} of {len(self.roms)} ROMs · {built} built"
         if self.show_missing.isChecked() and self._catalog:
-            owned = sum(g.owned for g in self._catalog)
-            summary += f"\nCollection: {owned} of {len(self._catalog)} games"
+            games = [g for g in self._catalog if self._in_series(g.title)]
+            summary += f"\nCollection: {sum(g.owned for g in games)} of {len(games)} games"
         self.count.setText(summary)
         self._visible_timer.start()  # filtering moves other games into view
 
     # --- collection (all games from the database) ----------------------------
 
-    def _catalog_missing(self) -> list[library.CatalogGame]:
-        return [g for g in self._catalog if not g.owned]
-
     def _refresh_catalog(self):
         self._catalog_generation += 1
         generation = self._catalog_generation
-        while self.list.count() > len(self.roms):  # drop the previous catalog rows
-            self.list.takeItem(self.list.count() - 1)
-        self._catalog = []
+        for item in self._missing_items:  # drop the previous catalog rows
+            self.list.takeItem(self.list.row(item))
+        self._catalog, self._missing, self._missing_items = [], [], []
         self._missing_covers = {}
         self._cover_requested = set()
         if not self.show_missing.isChecked():
-            self._filter()
+            self._regroup()
             return
         wanted = self.system_filter.currentData()
         keys = [wanted] if wanted else sorted({rom.system.key for rom in self.roms})
@@ -826,17 +951,19 @@ class LibraryPanel(QFrame):
         if generation != self._catalog_generation:
             return
         self._catalog = games
+        self._missing = [g for g in games if not g.owned]
         grey = self.palette().placeholderText().color()
-        for game in self._catalog_missing():
-            text = game.title if self.grid else f"{game.title}\n{game.system.key.upper()} · missing"
-            item = QListWidgetItem(text)
+        for game in self._missing:
+            details = [game.system.key.upper()] + ([game.year] if game.year else []) + ["missing"]
+            text = game.title if self.grid else f"{game.title}\n{' · '.join(details)}"
+            item = _SortItem(text)
             item.setForeground(grey)
             item.setFlags(Qt.ItemIsEnabled)  # listed, but nothing to open
             item.setToolTip("Not in your ROM folder:\n" + "\n".join(game.releases[:6]))
             item.setSizeHint(self.GRID_CELL if self.grid else QSize(0, 40))
             self.list.addItem(item)
-        self._filter()
-        self._visible_timer.start()
+            self._missing_items.append(item)
+        self._regroup()
 
     # --- covers of missing games -----------------------------------------------
 
@@ -846,23 +973,19 @@ class LibraryPanel(QFrame):
 
     def _request_visible_covers(self):
         """Queue covers for the missing games currently on screen."""
-        missing = self._catalog_missing()
-        if not missing:
+        if not self._missing:
             return
         viewport = self.list.viewport().rect()
-        start = len(self.roms)
-        for offset, game in enumerate(missing):
-            row = start + offset
-            item = self.list.item(row)
-            if item is None or item.isHidden() or row in self._cover_requested:
+        for index, (game, item) in enumerate(zip(self._missing, self._missing_items)):
+            if item.isHidden() or index in self._cover_requested:
                 continue
             if self.list.visualItemRect(item).intersects(viewport):
-                self._cover_requested.add(row)
-                self._cover_queue.put((self._catalog_generation, row, game))
+                self._cover_requested.add(index)
+                self._cover_queue.put((self._catalog_generation, index, game))
 
     def _cover_worker(self):
         while True:
-            generation, row, game = self._cover_queue.get()
+            generation, index, game = self._cover_queue.get()
             if generation != self._catalog_generation:
                 continue  # list changed meanwhile
             cover = None
@@ -875,15 +998,13 @@ class LibraryPanel(QFrame):
                     break
             if cover is not None:
                 cover.thumbnail((256, 256))
-                self._cover_ready.emit(generation, row, cover)
+                self._cover_ready.emit(generation, index, cover)
 
-    def _set_missing_cover(self, generation: int, row: int, cover):
-        if generation != self._catalog_generation:
+    def _set_missing_cover(self, generation: int, index: int, cover):
+        if generation != self._catalog_generation or index >= len(self._missing_items):
             return
-        self._missing_covers[row] = cover
-        item = self.list.item(row)
-        if item is not None:
-            item.setIcon(QPixmap.fromImage(to_qimage(self._style_missing(cover))))
+        self._missing_covers[index] = cover
+        self._missing_items[index].setIcon(QPixmap.fromImage(to_qimage(self._style_missing(cover))))
 
     def _style_missing(self, cover: Image.Image) -> Image.Image:
         grey = cover.convert("L").convert("RGBA")
@@ -897,10 +1018,8 @@ class LibraryPanel(QFrame):
 
     def _missing_style_changed(self):
         self.settings.setValue("library/missing_style", self.missing_style.currentData())
-        for row, cover in self._missing_covers.items():
-            item = self.list.item(row)
-            if item is not None:
-                item.setIcon(QPixmap.fromImage(to_qimage(self._style_missing(cover))))
+        for index, cover in self._missing_covers.items():
+            self._missing_items[index].setIcon(QPixmap.fromImage(to_qimage(self._style_missing(cover))))
 
     def _open_current(self):
         self._open_timer.stop()
@@ -911,10 +1030,10 @@ class LibraryPanel(QFrame):
 
     def select(self, path: Path):
         """Highlight a ROM opened elsewhere (e.g. dropped) without reopening it."""
-        row = self._rows.get(Path(path))
-        if row is not None and row != self.list.currentRow():
+        index = self._rows.get(Path(path))
+        if index is not None and self._rom_items[index] is not self.list.currentItem():
             self.list.blockSignals(True)
-            self.list.setCurrentRow(row)
+            self.list.setCurrentItem(self._rom_items[index])
             self.list.blockSignals(False)
 
     def stop(self):
