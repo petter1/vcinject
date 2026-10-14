@@ -145,6 +145,11 @@ upload it.
    On the 3DS: **FBI → Remote Install → Scan QR Code**. Double-clicking a game
    in the library does all of this in one go.
 
+The library remembers what it found out about each file – release, year,
+checksum and a small cover – like the game lists for 30 days. Unchanged files
+appear instantly on the next start without being read again; renamed or moved
+files are recognised by their checksum.
+
 **Show missing games** in the library lists every game of the system from the
 No-Intro database below your ROMs, with a region filter and an
 "owned X of Y" count. Covers of missing games are loaded for what is on screen

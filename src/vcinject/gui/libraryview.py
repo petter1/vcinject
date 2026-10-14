@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
-from .. import artwork, library, systems
+from .. import library, systems
 from ..errors import InjectError
 from .qtutil import gui_settings, to_qimage
 
@@ -785,15 +785,28 @@ class LibraryPanel(QFrame):
         roms = list(self.roms)
 
         def work():
+            # first everything the index knows (instant), then the new or changed files
+            todo = []
             for index, rom in enumerate(roms):
                 if generation != self._generation:
                     return
+                if library.from_index(rom):
+                    self._analyzed.emit(generation, index, rom)
+                else:
+                    todo.append((index, rom))
+            for done, (index, rom) in enumerate(todo, 1):
+                if generation != self._generation:
+                    break
                 try:
                     library.analyze(rom)
                 except Exception:  # unreadable file etc.: keep it listed as is
                     continue
                 self._analyzed.emit(generation, index, rom)
-            self._analysis_done.emit(generation)
+                if done % 20 == 0:
+                    library.save_index()
+            library.save_index()
+            if generation == self._generation:
+                self._analysis_done.emit(generation)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -1360,16 +1373,11 @@ class LibraryPanel(QFrame):
             generation, key, game = self._cover_queue.get()
             if generation != self._catalog_generation:
                 continue  # list changed meanwhile
-            cover = None
-            for name in game.releases[:4]:
-                try:
-                    cover = artwork.fetch_image(name, "boxart", game.system.database)
-                except InjectError:
-                    break  # offline
-                if cover is not None:
-                    break
+            try:
+                cover = library.catalog_cover(game)
+            except InjectError:
+                continue  # offline
             if cover is not None:
-                cover.thumbnail((256, 256))
                 self._cover_ready.emit(generation, key, cover)
 
     def _set_missing_cover(self, generation: int, key: str, cover):

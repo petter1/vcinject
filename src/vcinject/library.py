@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
+import threading
+import time
 import unicodedata
 import zipfile
 import zlib
@@ -15,6 +18,7 @@ from PIL import Image
 
 from . import artwork, registry, systems
 from .errors import InjectError
+from .template import data_dir
 
 _SKIP_DIRS = {".git", "__pycache__", ".Trashes", ".Spotlight-V100", ".fseventsd"}
 
@@ -85,12 +89,141 @@ def scan(root: Path) -> list[LibraryRom]:
     return sorted(found, key=lambda r: (r.folder.lower(), r.path.name.lower()))
 
 
+# --- index: what was found out about each file, so the next start is instant ------------
+#
+# Like the game lists, results are kept for 30 days: a file that has not changed
+# (same size and time) is shown at once with its cover, without reading it. A
+# renamed or moved file is recognised by its checksum. Covers are kept as small
+# pictures next to the index.
+
+_INDEX_MAX_AGE = 30 * 24 * 3600
+THUMB = 256  # pixels; large enough for the grid and Cover Flow
+_index: dict | None = None
+_index_lock = threading.Lock()
+_index_dirty = False
+
+
+def _index_dir() -> Path:
+    return data_dir() / "library"
+
+
+_index_home: Path | None = None   # data folder the loaded index belongs to
+
+
+def _load_index() -> dict:
+    global _index, _index_home, _index_dirty
+    with _index_lock:
+        if _index is None or _index_home != _index_dir():
+            try:
+                _index = json.loads((_index_dir() / "index.json").read_text(encoding="utf-8"))
+                if _index.get("format") != 1:
+                    raise ValueError
+            except (OSError, ValueError):
+                _index = {"format": 1, "files": {}}
+            _index_home, _index_dirty = _index_dir(), False
+        return _index
+
+
+def save_index() -> None:
+    """Write the index if anything changed (cheap to call often)."""
+    global _index_dirty
+    with _index_lock:
+        if _index is None or not _index_dirty:
+            return
+        folder = _index_home
+        folder.mkdir(parents=True, exist_ok=True)
+        partial = folder / "index.json.part"
+        partial.write_text(json.dumps(_index, ensure_ascii=False), encoding="utf-8")
+        partial.replace(folder / "index.json")
+        _index_dirty = False
+
+
+def _thumb_path(name: str) -> Path:
+    return _index_dir() / "covers" / f"{name}.png"
+
+
+def _load_thumb(name: str) -> Image.Image | None:
+    try:
+        with Image.open(_thumb_path(name)) as img:
+            img.load()
+            return img.copy()
+    except OSError:
+        return None
+
+
+def _save_thumb(name: str, image: Image.Image) -> None:
+    path = _thumb_path(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image.convert("RGB").save(path, optimize=True)
+
+
+_FIELDS = ("sha1", "release", "method", "family", "year")
+
+
+def from_index(rom: LibraryRom, max_age: float | None = _INDEX_MAX_AGE) -> bool:
+    """Fill ``rom`` from the index when its file is unchanged (and the entry is
+    younger than ``max_age``). Returns True when it was."""
+    try:
+        stat = rom.path.stat()
+    except OSError:
+        return False
+    record = _load_index()["files"].get(str(rom.path))
+    if not record or record.get("size") != stat.st_size or record.get("mtime") != stat.st_mtime:
+        return False
+    if max_age is not None and time.time() - record.get("checked", 0) > max_age:
+        return False
+    for name in _FIELDS:
+        setattr(rom, name, record.get(name) or ("" if name in ("sha1", "method", "family") else None))
+    rom.cover = _load_thumb(rom.sha1) if record.get("cover") else None
+    rom.built = _built(rom.sha1)
+    return True
+
+
+def _remember(rom: LibraryRom) -> None:
+    global _index_dirty
+    try:
+        stat = rom.path.stat()
+    except OSError:
+        return
+    if rom.cover is not None:
+        _save_thumb(rom.sha1, rom.cover)
+    record = {name: getattr(rom, name) for name in _FIELDS}
+    record.update(size=stat.st_size, mtime=stat.st_mtime, checked=time.time(),
+                  cover=rom.cover is not None)
+    index = _load_index()
+    with _index_lock:
+        index["files"][str(rom.path)] = record
+        _index_dirty = True
+
+
+def _by_checksum(sha1: str) -> dict | None:
+    """An entry of the same data under another name (the file was renamed or moved)."""
+    for record in _load_index()["files"].values():
+        if record.get("sha1") == sha1 and time.time() - record.get("checked", 0) < _INDEX_MAX_AGE:
+            return record
+    return None
+
+
+def _built(sha1: str) -> list:
+    return sorted((e for e in registry.load().values() if e.rom_sha1 == sha1),
+                  key=lambda e: e.built_at)
+
+
 def analyze(rom: LibraryRom, online: bool = True, cover: bool = True) -> LibraryRom:
-    """Identify the ROM, look up its cover and whether it was built before."""
+    """Identify the ROM, look up its cover and whether it was built before.
+    Unchanged files come from the index without being read."""
+    if from_index(rom, max_age=_INDEX_MAX_AGE if online else None):
+        return rom
     data = systems.read_rom(rom.path)
     rom.sha1 = hashlib.sha1(data).hexdigest()
-    rom.built = sorted((e for e in registry.load().values() if e.rom_sha1 == rom.sha1),
-                       key=lambda e: e.built_at)
+    rom.built = _built(rom.sha1)
+    known = _by_checksum(rom.sha1)
+    if known is not None and (known.get("release") or not online):
+        for name in _FIELDS[1:]:
+            setattr(rom, name, known.get(name) or ("" if name in ("method", "family") else None))
+        rom.cover = _load_thumb(rom.sha1) if known.get("cover") else None
+        _remember(rom)
+        return rom
     if not online:
         return rom
     try:
@@ -122,10 +255,27 @@ def analyze(rom: LibraryRom, online: bool = True, cover: bool = True) -> Library
             if game and not match:
                 rom.release, rom.year, rom.method = game.name, game.year, "retrogamesnexus"
         if rom.cover is not None:
-            rom.cover.thumbnail((128, 128))
+            rom.cover.thumbnail((THUMB, THUMB))
     except InjectError:
-        pass  # offline: the library still lists the file
+        return rom  # offline: the library still lists the file, try again next time
+    _remember(rom)
     return rom
+
+
+def catalog_cover(game: "CatalogGame") -> Image.Image | None:
+    """Box art of a game from the catalog (missing games), as a small cached picture."""
+    name = "missing-" + hashlib.sha1(f"{game.system.key}:{game.releases[0] if game.releases else game.title}"
+                                     .encode()).hexdigest()
+    cover = _load_thumb(name)
+    if cover is not None:
+        return cover
+    for release in game.releases[:4]:
+        cover = artwork.fetch_image(release, "boxart", game.system.database)  # may raise offline
+        if cover is not None:
+            cover.thumbnail((THUMB, THUMB))
+            _save_thumb(name, cover)
+            return cover
+    return None
 
 
 def crc32(path: Path) -> str:
@@ -413,7 +563,18 @@ def rename(rom: LibraryRom, stem: str) -> Path:
                 partial.unlink()
     path.rename(target)
     rom.path = target
+    _forget_path(path)
+    if rom.sha1:
+        _remember(rom)
     return target
+
+
+def _forget_path(path: Path) -> None:
+    global _index_dirty
+    index = _load_index()
+    with _index_lock:
+        if index["files"].pop(str(path), None) is not None:
+            _index_dirty = True
 
 
 def clean_names(roms: list[LibraryRom]) -> list[tuple[LibraryRom, str]]:
