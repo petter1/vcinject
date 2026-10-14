@@ -155,10 +155,12 @@ into one entry ("3 versions"); the version menu under the ROM picks which one
 to build. Copies of the same release are flagged – bit-identical or not – and
 **Versions and duplicates…** (right-click) moves the spare ones to the trash.
 
-**Sort and series:** sort by name, series, release year, system or folder;
-the series menu lists recognised series (e.g. *Pokemon (5/7)* = owned/known)
-and compilations. With missing games shown, *Owned games first* keeps your
-own games on top or mixes them into the order.
+**Sort and series:** sort by name, release year, system or folder. Series
+are recognised from the titles (e.g. all Pokémon games); the series menu
+filters by one (*Pokemon (5/7)* = owned/known) or by compilations. With
+**Group series** on, each series is shown as one stack of covers – click it to
+open it in place, click again to close it. With missing games shown, *Owned
+first* keeps your own games on top or mixes them into the order.
 
 **Zipping:** **Zip** packs every unpacked ROM in the library into its own
 .zip file next to it – one game per zip, named like the ROM
@@ -172,8 +174,11 @@ name – optionally after every scan – and right-click → *Self-dumped* marks
 ROM as dumped from your own cartridge by adding ` - selfdumped` to its file
 name (the mark is kept when renaming). Zipped ROMs are renamed inside, too.
 
-**⧉** opens the library in its own resizable window as a grid of large covers –
-handy for browsing a big collection; clicking a game there opens it in the main
+**⧉** opens the library in its own resizable window with three views:
+**Grid** (large covers), **Details** (a table with system, year, series,
+release, folder, size and status; click a column header to sort, stacks are
+tree nodes) and **Cover Flow** (arrow keys, mouse wheel or the scroll bar;
+Enter or a double-click builds and installs). Clicking a game there opens it in the main
 window as usual.
 
 ## Command line

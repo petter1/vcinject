@@ -283,11 +283,13 @@ def series(titles: list[str]) -> dict[str, str]:
     for title in titles:  # readable name of each start: the words as first written
         head = re.split(r"\s+-\s+|:\s", title.split(" (", 1)[0], maxsplit=1)[0]
         head = re.sub(r",\s*the$", "", head, flags=re.I)
-        written = [w for w in re.findall(r"[^\s]+", head) if re.search(r"[A-Za-z0-9]", w)]
-        if written and written[0].lower() == "the":
-            written = written[1:]
-        for k in range(1, min(len(written), len(heads[title])) + 1):
-            display.setdefault(tuple(heads[title][:k]), " ".join(written[:k]).strip(",:"))
+        # the same word runs as _head_words, so "F-Zero" stays "F-Zero"
+        runs = list(re.finditer(r"[^\W_]+(?:'[^\W_]+)?", head))
+        if runs and runs[0].group().lower() == "the":
+            head, runs = head[runs[0].end():].lstrip(), list(re.finditer(r"[^\W_]+(?:'[^\W_]+)?",
+                                                                         head[runs[0].end():].lstrip()))
+        for k in range(1, min(len(runs), len(heads[title])) + 1):
+            display.setdefault(tuple(heads[title][:k]), head[:runs[k - 1].end()].strip(" ,:-"))
     result = {}
     for title, words in heads.items():
         chosen = None
