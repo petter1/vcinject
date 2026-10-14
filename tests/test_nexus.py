@@ -31,11 +31,11 @@ def _site(monkeypatch, tmp_path):
     }
     requested = []
 
-    def fake_get(url):
+    def fake_get(url, etag=None):
         requested.append(url)
         if "/images/games/cover/" in url:
-            return image.getvalue()
-        return pages.get(url[len(nexus.BASE) + 1:])
+            return image.getvalue(), None
+        return pages.get(url[len(nexus.BASE) + 1:]), None
 
     monkeypatch.setattr(nexus, "_get", fake_get)
     return requested

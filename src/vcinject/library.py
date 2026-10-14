@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import re
@@ -141,22 +142,25 @@ def save_index() -> None:
 
 
 def _thumb_path(name: str) -> Path:
-    return _index_dir() / "covers" / f"{name}.png"
+    return _index_dir() / "covers" / f"{name}.jpg"  # small: thousands of them add up
 
 
 def _load_thumb(name: str) -> Image.Image | None:
-    try:
-        with Image.open(_thumb_path(name)) as img:
-            img.load()
-            return img.copy()
-    except OSError:
-        return None
+    for path in (_thumb_path(name), _thumb_path(name).with_suffix(".png")):  # .png: older versions
+        try:
+            with Image.open(path) as img:
+                img.load()
+                return img.copy()
+        except OSError:
+            continue
+    return None
 
 
 def _save_thumb(name: str, image: Image.Image) -> None:
     path = _thumb_path(name)
     path.parent.mkdir(parents=True, exist_ok=True)
-    image.convert("RGB").save(path, optimize=True)
+    image.convert("RGB").save(path, quality=88, optimize=True)
+    path.with_suffix(".png").unlink(missing_ok=True)
 
 
 _FIELDS = ("sha1", "release", "method", "family", "year", "crc", "serial")
@@ -232,10 +236,19 @@ def analyze(rom: LibraryRom, online: bool = True, cover: bool = True,
         return rom
     if not online:
         return rom
+    _identify(rom, cover, refresh)
+    return rom
+
+
+def _identify(rom: LibraryRom, cover: bool = True, refresh: bool = False) -> None:
+    """Find release, year and cover online for a ROM whose CRC32 and serial are
+    known, and remember the result. ``refresh`` asks the servers whether the
+    cached pictures changed."""
+    name_in_folder = plain_stem(systems.rom_name(rom.path)) + Path(systems.rom_name(rom.path)).suffix
     try:
         db = artwork.ReleaseDatabase.load(system=rom.system.database)
-        game_code = data[0xAC:0xB0].decode("ascii", "replace") if rom.system.key == "gba" else ""
-        match = db.identify(rom.system.strip_header(data), game_code, systems.rom_name(rom.path))
+        game_code = rom.serial if rom.system.key == "gba" else ""
+        match = db.identify_crc(rom.crc, game_code, name_in_folder)
         if match and artwork.is_probably_hack(match, systems.rom_name(rom.path)):
             game, hack_cover = artwork.nexus_cover([plain_stem(systems.rom_name(rom.path))],
                                                    rom.system.database, refresh)
@@ -266,18 +279,23 @@ def analyze(rom: LibraryRom, online: bool = True, cover: bool = True,
     except InjectError:
         if refresh:
             raise
-        return rom  # offline: the library still lists the file, try again next time
+        return  # offline: the library still lists the file, try again next time
     _remember(rom)
-    return rom
 
 
 def refresh(rom: LibraryRom) -> bool:
-    """Check ``rom`` online again: release, year and cover are downloaded anew.
-    ``rom`` only changes when that worked (offline it keeps what it had)."""
+    """Check ``rom`` online again: release, year and cover. Pictures are only
+    downloaded when they changed on the server; a file the index knows is not
+    read again. ``rom`` only changes when that worked (offline it keeps what it had)."""
     fresh = LibraryRom(rom.path, rom.system, rom.size, rom.folder)
     try:
-        analyze(fresh, refresh=True)
-    except (InjectError, OSError):
+        if from_index(fresh) and fresh.crc:
+            fresh.release = fresh.year = fresh.cover = None
+            fresh.method = fresh.family = ""
+            _identify(fresh, refresh=True)
+        else:
+            analyze(fresh, refresh=True)
+    except (InjectError, OSError, ValueError, zipfile.BadZipFile):
         return False
     for name in ("sha1", "release", "year", "method", "family", "crc", "serial", "cover", "built"):
         setattr(rom, name, getattr(fresh, name))
@@ -286,20 +304,44 @@ def refresh(rom: LibraryRom) -> bool:
 
 
 def catalog_cover(game: "CatalogGame", refresh: bool = False) -> Image.Image | None:
-    """Box art of a game from the catalog (missing games), as a small cached picture."""
-    name = "missing-" + hashlib.sha1(f"{game.system.key}:{game.releases[0] if game.releases else game.title}"
-                                     .encode()).hexdigest()
-    cover = None if refresh else _load_thumb(name)
-    if cover is not None:
-        return cover
-    for release in game.releases[:4]:
-        cover = artwork.fetch_image(release, "boxart", game.system.database, refresh)  # may raise
-        if cover is not None:
-            cover.thumbnail((THUMB, THUMB))
-            _save_thumb(name, cover)
+    """Box art of a game from the catalog (missing games), as a small cached picture.
+
+    Only the small picture is kept (not the original), with the server's ETag, so
+    ``refresh`` merely asks whether it changed. Games without any cover are noted
+    and not asked for again until a refresh."""
+    name = _catalog_thumb_name(game)
+    path = _thumb_path(name)
+    none = path.with_suffix(".none")
+    if not refresh:
+        cover = _load_thumb(name)
+        if cover is not None or none.is_file():
             return cover
-    if refresh:
-        _thumb_path(name).unlink(missing_ok=True)  # the cover is gone upstream
+    tag_file = path.with_suffix(".etag")
+    known_url, etag = "", None
+    if refresh and tag_file.is_file() and path.is_file():
+        known_url, _, etag = tag_file.read_text().partition("\n")
+    for release in game.releases[:4]:
+        url = artwork.thumbnail_url(release, "boxart", game.system.database)
+        data, new_tag = artwork.conditional_get(url, etag if url == known_url else None)  # may raise
+        if data is artwork.NOT_MODIFIED:
+            return _load_thumb(name)
+        if data is None:
+            continue
+        try:
+            with Image.open(io.BytesIO(data)) as img:
+                img.load()
+                cover = img.convert("RGB")
+        except OSError:
+            continue
+        cover.thumbnail((THUMB, THUMB))
+        _save_thumb(name, cover)
+        tag_file.write_text(f"{url}\n{new_tag or ''}")
+        none.unlink(missing_ok=True)
+        return cover
+    path.unlink(missing_ok=True)
+    tag_file.unlink(missing_ok=True)
+    none.parent.mkdir(parents=True, exist_ok=True)
+    none.touch()
     return None
 
 
@@ -642,3 +684,63 @@ def nexus_url(title: str, system: systems.System, language: str = "",
     except InjectError:
         return None
     return nexus.page_url(game.slug, language) if game else None
+
+
+# --- downloading all covers at once -------------------------------------------------
+
+def _catalog_thumb_name(game: "CatalogGame") -> str:
+    key = f"{game.system.key}:{game.releases[0] if game.releases else game.title}"
+    return "missing-" + hashlib.sha1(key.encode()).hexdigest()
+
+
+def missing_games(roms: list[LibraryRom], prefer: tuple[str, ...] = ()) -> list["CatalogGame"]:
+    """Every game of the library's systems that is not in the folder."""
+    games = []
+    for key in sorted({rom.system.key for rom in roms}):
+        try:
+            games += catalog(systems.SYSTEMS[key], prefer)
+        except InjectError:
+            continue
+    mark_owned(games, roms)
+    return [g for g in games if not g.owned]
+
+
+def download_covers(roms: list[LibraryRom], games: list["CatalogGame"], stop: threading.Event,
+                    progress=lambda done, total, name: None, workers: int = 8) -> tuple[int, int]:
+    """Identify ``roms`` and cache their covers, and cache the covers of ``games``,
+    several at a time. Whatever is cached already is skipped, so an interrupted
+    run continues where it stopped. Returns (done, failed)."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    jobs = []
+    for rom in roms:
+        if not from_index(rom):
+            jobs.append((rom.path.name, lambda rom=rom: analyze(rom)))
+    for game in games:
+        thumb = _thumb_path(_catalog_thumb_name(game))
+        if not thumb.is_file() and not thumb.with_suffix(".none").is_file():
+            jobs.append((game.title, lambda game=game: catalog_cover(game)))
+    total = len(roms) + len(games)
+    done = total - len(jobs)
+    failed = 0
+    progress(done, total, "")
+    if not jobs:
+        return done, failed
+    executor = ThreadPoolExecutor(max_workers=workers)
+    futures = {executor.submit(job): name for name, job in jobs}
+    try:
+        for count, future in enumerate(as_completed(futures), 1):
+            try:
+                future.result()
+            except Exception:  # one bad file or picture must not stop the rest
+                failed += 1
+            done += 1
+            progress(done, total, futures[future])
+            if count % 25 == 0:
+                save_index()
+            if stop.is_set():
+                break
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+        save_index()
+    return done, failed

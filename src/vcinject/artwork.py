@@ -85,6 +85,67 @@ def _download(url: str) -> bytes | None:
         raise InjectError(f"Could not reach the artwork server: {exc}") from exc
 
 
+NOT_MODIFIED = object()  # a conditional request found the cached copy still current
+
+
+def conditional_get(url: str, etag: str | None = None, headers: dict | None = None):
+    """GET ``url``; with ``etag`` the server answers "not modified" when the cached
+    copy is still current. Returns (data | None | NOT_MODIFIED, new etag)."""
+    request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT, **(headers or {})})
+    if etag:
+        request.add_header("If-None-Match", etag)
+    try:
+        with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:
+            return response.read(), response.headers.get("ETag")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 304:
+            return NOT_MODIFIED, etag
+        if exc.code in (404, 410):
+            return None, None
+        raise InjectError(f"Server error {exc.code} for {url}") from exc
+    except OSError as exc:
+        raise InjectError(f"Could not reach {urllib.parse.urlsplit(url).netloc}: {exc}") from exc
+
+
+def cached_download(path: Path, url: str, refresh: bool = False, max_age: float | None = None,
+                    get=conditional_get) -> bytes | None:
+    """``url`` through a file cache next to ``path``; None when it does not exist.
+
+    The server's ETag is kept beside the file, so ``refresh`` only asks whether the
+    file changed and downloads it only then. ``max_age`` lets a copy expire.
+    Offline, a cached copy is used rather than failing."""
+    missing = path.with_name(path.name + ".missing")
+    tag = path.with_name(path.name + ".etag")
+    fresh = lambda p: max_age is None or time.time() - p.stat().st_mtime < max_age
+    if not refresh and path.is_file() and fresh(path):
+        return path.read_bytes()
+    if not refresh and missing.is_file() and fresh(missing):
+        return None
+    etag = tag.read_text().strip() if tag.is_file() and path.is_file() else None
+    try:
+        data, new_tag = get(url, etag)
+    except InjectError:
+        if path.is_file():
+            return path.read_bytes()
+        raise
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if data is NOT_MODIFIED:
+        path.touch()  # checked just now
+        return path.read_bytes()
+    if data is None:
+        missing.touch()
+        path.unlink(missing_ok=True)
+        tag.unlink(missing_ok=True)
+        return None
+    path.write_bytes(data)
+    missing.unlink(missing_ok=True)
+    if new_tag:
+        tag.write_text(new_tag)
+    else:
+        tag.unlink(missing_ok=True)
+    return data
+
+
 _DB_CACHE: dict[str, "ReleaseDatabase"] = {}
 
 
@@ -149,7 +210,10 @@ class ReleaseDatabase:
         return db
 
     def identify(self, rom: bytes, game_code: str = "", filename: str = "") -> Match | None:
-        crc = f"{zlib.crc32(rom) & 0xFFFFFFFF:08X}"
+        return self.identify_crc(f"{zlib.crc32(rom) & 0xFFFFFFFF:08X}", game_code, filename)
+
+    def identify_crc(self, crc: str, game_code: str = "", filename: str = "") -> Match | None:
+        """identify() for a ROM whose CRC32 is already known (no need to read it)."""
         if crc in self.by_crc:
             return Match(self.by_crc[crc], "crc")
         candidates = self.by_serial.get(game_code.upper()) if game_code else None
@@ -216,24 +280,17 @@ def thumbnail_url(name: str, kind: str, system: str = SYSTEM) -> str:
 
 def fetch_image(name: str, kind: str, system: str = SYSTEM,
                 refresh: bool = False) -> Image.Image | None:
-    """An image from the thumbnail server, cached on disk. ``refresh`` downloads it
-    again (e.g. when a cover was replaced or added upstream)."""
+    """An image from the thumbnail server, cached on disk. ``refresh`` asks the
+    server whether it changed (e.g. a cover was replaced or added upstream)."""
     folder = _cache_dir() if system == SYSTEM else _cache_dir() / system
     cache = folder / KINDS[kind] / f"{_THUMB_UNSAFE.sub('_', name)}.png"
-    missing = cache.with_suffix(".missing")
-    if cache.is_file() and not refresh:
-        data = cache.read_bytes()
-    elif missing.is_file() and not refresh:
+    old_marker = cache.with_suffix(".missing")  # older versions wrote "<name>.missing"
+    if old_marker.is_file():
+        old_marker.rename(cache.with_name(cache.name + ".missing"))
+    data = cached_download(cache, thumbnail_url(name, kind, system), refresh,
+                           get=lambda url, etag: conditional_get(url, etag))
+    if data is None:
         return None
-    else:
-        data = _download(thumbnail_url(name, kind, system))
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        if data is None:
-            missing.touch()
-            cache.unlink(missing_ok=True)
-            return None
-        cache.write_bytes(data)
-        missing.unlink(missing_ok=True)
     try:
         with Image.open(io.BytesIO(data)) as img:
             img.load()

@@ -28,6 +28,7 @@ from .. import builder, forwarder, health, library, systems
 from ..builder import (GBA_3D, GbaInjectOptions, default_product_code,
                        default_title_id, parse_title_id)
 from ..errors import InjectError, MissingResource
+from . import coversync
 from .libraryview import LibraryPanel, LibraryWindow, VersionsDialog, open_game_page
 from .qtutil import gui_settings, to_pixmap, to_qimage  # noqa: F401 (gui_settings re-exported)
 
@@ -654,7 +655,8 @@ class MainWindow(QMainWindow):
         right.insertWidget(1, self.qr_panel)  # takes the preview's place while serving
         right.addWidget(self.log_view, 1)
         self.qr_panel.shown.connect(lambda visible: self.preview_card.setVisible(not visible))
-        self.library = LibraryPanel()
+        # on the first start the covers are downloaded before the library is shown
+        self.library = LibraryPanel(autoload=not coversync.needed())
         self.library.rom_chosen.connect(self.load_rom)
         self.library.rom_install.connect(self.install_from_library)
         self.library.open_window.connect(self.open_library_window)
@@ -1016,6 +1018,16 @@ class MainWindow(QMainWindow):
             settings.setValue("setup/done", True)
             # first start: begin at the welcome page; later: jump to what is missing
             self.open_setup(None if first_run else missing_required[0].resource)
+        self.download_covers_if_needed()
+
+    def download_covers_if_needed(self):
+        """First start (or postponed last time): download the covers, then show the library."""
+        if coversync.needed():
+            self.library.stop()
+            coversync.CoverDownloadDialog(self).exec()
+            self.library.rescan()  # instant now: everything comes from the cache
+        elif not self.library.roms:
+            self.library.rescan()
 
     def heal_and_retry(self, error: MissingResource):
         """A build hit a missing part: offer exactly that fix, then build again."""

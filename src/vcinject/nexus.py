@@ -13,14 +13,12 @@ import difflib
 import io
 import json
 import re
-import time
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
 from PIL import Image
 
-from .errors import InjectError
 
 BASE = "https://retrogamesnexus.com"
 _MAX_AGE = 30 * 24 * 3600
@@ -50,34 +48,17 @@ def _cache_dir() -> Path:
     return artwork_cache() / "retrogamesnexus"
 
 
-def _get(url: str) -> bytes | None:
-    from .artwork import _download
-    return _download(url)
+def _get(url: str, etag: str | None = None):
+    """(data | None | NOT_MODIFIED, etag); tests replace this."""
+    from .artwork import conditional_get
+    return conditional_get(url, etag)
 
 
 def _cached(path: Path, url: str, refresh: bool = False,
             max_age: float | None = None) -> bytes | None:
-    """``url`` through a file cache; None when the page does not exist.
-    ``refresh`` downloads it again; ``max_age`` lets old copies expire."""
-    missing = path.with_name(path.name + ".missing")
-    fresh = lambda p: max_age is None or time.time() - p.stat().st_mtime < max_age
-    if not refresh and path.is_file() and fresh(path):
-        return path.read_bytes()
-    if not refresh and missing.is_file() and fresh(missing):
-        return None
-    try:
-        data = _get(url)
-    except InjectError:
-        if path.is_file():
-            return path.read_bytes()  # offline: a stale copy is fine
-        raise
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if data is None:
-        missing.touch()
-        return None
-    path.write_bytes(data)
-    missing.unlink(missing_ok=True)
-    return data
+    """``url`` through the shared file cache (see artwork.cached_download)."""
+    from .artwork import cached_download
+    return cached_download(path, url, refresh, max_age, get=lambda u, etag: _get(u, etag))
 
 
 def words(title: str) -> list[str]:
@@ -91,12 +72,21 @@ def words(title: str) -> list[str]:
     return [t for t in tokens if t not in _NOISE]
 
 
+_SLUGS: dict[Path, list[str]] = {}  # per cache folder; parsing the sitemap takes a moment
+
+
 def slugs() -> list[str]:
     """Every game page on the site (from its sitemap)."""
+    path = _cache_dir() / "sitemap.xml"
+    if path in _SLUGS:
+        return _SLUGS[path]
     # the list of games is refreshed like the other game lists, monthly
-    data = _cached(_cache_dir() / "sitemap.xml", f"{BASE}/sitemap.xml", max_age=_MAX_AGE) or b""
+    data = _cached(path, f"{BASE}/sitemap.xml", max_age=_MAX_AGE) or b""
     found = re.findall(rb"<loc>https://retrogamesnexus\.com/games/([a-z0-9-]+)</loc>", data)
-    return sorted({s.decode() for s in found})
+    result = sorted({s.decode() for s in found})
+    if result:  # an empty list (offline) is tried again next time
+        _SLUGS[path] = result
+    return result
 
 
 def candidates(title: str, all_slugs: list[str]) -> list[tuple[float, str]]:

@@ -149,13 +149,20 @@ upload it.
    On the 3DS: **FBI → Remote Install → Scan QR Code**. Double-clicking a game
    in the library does all of this in one go.
 
+On the first start with a ROM folder, **Download game covers** offers to
+fetch every cover – your games and every missing game of the same consoles –
+or only the covers of your own games, with a progress bar (about 20 covers a
+second); *Continue on next startup* stops and carries on next time without
+fetching anything twice.
+
 The library remembers what it found out about each file – release, year,
 checksum and a small cover – so unchanged files appear instantly on the next
 start without being read again; renamed or moved files are recognised by their
 checksum. Nothing expires: selecting a ROM checks it online again in the
 background (once per session; *Check covers on selection* switches it off),
 right-click → *Reload cover and info* does it on demand, and **Covers**
-refreshes the whole library. The game lists and the covers of missing games
+refreshes the whole library – it only asks the servers whether each picture
+changed (ETag) and downloads just the ones that did. The game lists and the covers of missing games
 are cached the same way. **Rescan** reads the folder again.
 
 Under the ROM, vcinject shows its **CRC32** and cartridge **serial** – the

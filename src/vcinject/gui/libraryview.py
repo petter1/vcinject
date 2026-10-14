@@ -561,7 +561,7 @@ class LibraryPanel(QFrame):
 
     _panels: "weakref.WeakSet[LibraryPanel]" = weakref.WeakSet()  # main window + library window
 
-    def __init__(self, grid: bool = False):
+    def __init__(self, grid: bool = False, autoload: bool = True):
         super().__init__(objectName="card")
         LibraryPanel._panels.add(self)
         self.grid = grid  # True: the big library window with view choice
@@ -757,7 +757,7 @@ class LibraryPanel(QFrame):
         self._reload_progress.connect(self._show_reload_progress)
 
         folder = self.settings.value("library/folder", "")
-        if folder and Path(folder).is_dir():
+        if autoload and folder and Path(folder).is_dir():
             self.load(Path(folder))
 
     def _add_view(self, key: str, view: QWidget):
@@ -1253,8 +1253,11 @@ class LibraryPanel(QFrame):
             if generation != self._generation or index is None:
                 continue
             rom = self.roms[index]
-            if library.refresh(rom):
-                self._refreshed_one.emit(generation, rom)
+            try:
+                if library.refresh(rom):
+                    self._refreshed_one.emit(generation, rom)
+            except Exception:  # never let one file end the worker
+                continue
 
     def _after_refresh(self, generation: int, rom: library.LibraryRom):
         if generation == self._generation:
@@ -1273,13 +1276,30 @@ class LibraryPanel(QFrame):
         self._visible_timer.start()
 
     def _reload_all_work(self, job):
+        """Check every ROM again, several at a time; pictures are only downloaded
+        when they changed on the server."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         generation, roms = job
-        for done, rom in enumerate(roms, 1):
-            if generation != self._generation:
-                return
-            if library.refresh(rom):
+        stale = lambda: generation != self._generation
+
+        def one(rom):
+            if not stale() and library.refresh(rom):
                 self._refreshed_one.emit(generation, rom)
-            self._reload_progress.emit(generation, done, len(roms))
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = [pool.submit(one, rom) for rom in roms]
+            for done, future in enumerate(as_completed(futures), 1):
+                try:
+                    future.result()
+                except Exception:
+                    pass  # one bad file must not stop the rest
+                if stale():
+                    for other in futures:
+                        other.cancel()
+                    return
+                self._reload_progress.emit(generation, done, len(roms))
+        library.save_index()
 
     def _show_reload_progress(self, generation: int, done: int, total: int):
         if generation == self._generation:
@@ -1481,8 +1501,8 @@ class LibraryPanel(QFrame):
                 continue  # list changed meanwhile
             try:
                 cover = library.catalog_cover(game, refresh=reload)
-            except InjectError:
-                continue  # offline
+            except Exception:  # offline or a broken picture: leave the placeholder
+                continue
             if cover is not None:
                 self._cover_ready.emit(generation, key, cover)
 

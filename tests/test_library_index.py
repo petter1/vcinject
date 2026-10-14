@@ -76,7 +76,7 @@ def test_refresh_downloads_again_and_keeps_old_data_offline(tmp_path, monkeypatc
     class Db:
         serials = {}
 
-        def identify(self, *args):
+        def identify_crc(self, *args):
             return artwork.Match("Game (Europe) (Rev 1)", "crc")
 
         def sibling_crcs(self, name):
@@ -99,21 +99,22 @@ def test_refresh_downloads_again_and_keeps_old_data_offline(tmp_path, monkeypatc
     assert library.from_index(again) and again.release == "Game (Europe) (Rev 1)"
 
 
-def test_fetch_image_refresh_bypasses_cache(tmp_path, monkeypatch):
+def test_fetch_image_refresh_asks_whether_the_image_changed(tmp_path, monkeypatch):
     monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path / "data"))
-    downloads = []
+    import io
+    png = io.BytesIO()
+    Image.new("RGB", (4, 4), "green").save(png, "PNG")
+    requests = []
 
-    def download(url):
-        downloads.append(url)
-        image = Image.new("RGB", (4, 4), "green")
-        import io
-        out = io.BytesIO()
-        image.save(out, "PNG")
-        return out.getvalue()
+    def get(url, etag=None):
+        requests.append(etag)
+        if etag == "v1":
+            return artwork.NOT_MODIFIED, etag
+        return png.getvalue(), "v1"
 
-    monkeypatch.setattr(artwork, "_download", download)
-    artwork.fetch_image("Game (Europe)", "boxart")
-    artwork.fetch_image("Game (Europe)", "boxart")
-    assert len(downloads) == 1
-    artwork.fetch_image("Game (Europe)", "boxart", refresh=True)
-    assert len(downloads) == 2
+    monkeypatch.setattr(artwork, "conditional_get", get)
+    assert artwork.fetch_image("Game (Europe)", "boxart") is not None
+    assert artwork.fetch_image("Game (Europe)", "boxart") is not None   # from the cache
+    assert requests == [None]
+    assert artwork.fetch_image("Game (Europe)", "boxart", refresh=True).size == (4, 4)
+    assert requests == [None, "v1"]  # only asked: unchanged, nothing downloaded
