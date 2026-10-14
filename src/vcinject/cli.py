@@ -6,10 +6,10 @@ import sys
 import time
 from pathlib import Path
 
-from . import (__version__, artwork, forwarder, gba, library, registry, serve, systems, template,
-               tickets, tools, vcbanner)
+from . import (__version__, artwork, forwarder, gba, health, library, registry, serve, systems,
+               template, tickets, tools, vcbanner)
 from .builder import GbaInjectOptions, build, parse_title_id
-from .errors import InjectError
+from .errors import InjectError, MissingResource
 
 
 def _save_type(value: str) -> gba.SaveType | None:
@@ -111,6 +111,8 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("title_id", type=_title_id)
 
     sub.add_parser("info", help="show tool and template status")
+    d = sub.add_parser("doctor", help="check everything vcinject needs; --fix sets missing parts up")
+    d.add_argument("--fix", action="store_true", help="repair interactively")
     sub.add_parser("save-types", help="list GBA save types")
     sub.add_parser("gui", help="start the graphical interface")
     return parser
@@ -128,7 +130,13 @@ def cmd_gba(args: argparse.Namespace) -> int:
     if systems.for_rom(args.rom).key == "gba" and not template.is_installed():
         print("No GBA VC template installed yet, downloading it once...")
         template.download()
-    result = build(options)
+    try:
+        result = build(options)
+    except MissingResource as exc:  # self-healing: offer the fix, then try again
+        print(f"{exc}")
+        if not _confirm("Set it up now?") or not health.heal(exc.resource, _ask_file):
+            raise
+        result = build(options)
     if args.qr:
         return _serve([result.output_path], args.host, args.port)
     return 0
@@ -178,6 +186,38 @@ def cmd_setup(args: argparse.Namespace) -> int:
         print("Downloading GBA VC template...")
         template.download()
     print(f"Installed into {template.template_dir()}")
+    return 0
+
+
+def _ask_file(question: str) -> Path | None:
+    """Terminal prompt for one of the user's files (drag & drop into the terminal works)."""
+    if not sys.stdin.isatty():
+        return None
+    answer = input(f"{question}\nPath (Enter to skip): ").strip().strip("'\"")
+    return Path(answer).expanduser() if answer else None
+
+
+def _confirm(question: str) -> bool:
+    if not sys.stdin.isatty():
+        return False
+    return input(f"{question} [Y/n] ").strip().lower() in ("", "y", "yes", "j", "ja")
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    results = health.check()
+    for c in results:
+        mark = "✓" if c.ok else ("✗" if c.required else "–")
+        print(f" {mark} {c.label:40} {'' if c.ok else c.detail}")
+    broken = [c for c in results if not c.ok]
+    if not args.fix:
+        if any(c.required for c in broken):
+            print("\nRequired parts are missing: run 'vcinject doctor --fix'.")
+        return 1 if any(c.required for c in broken) else 0
+    for c in broken:
+        if not c.required and not _confirm(f"\nSet up '{c.label}'?"):
+            continue
+        print(f"\n→ {c.label}")
+        print("   ok" if health.heal(c.resource, _ask_file) else "   still missing")
     return 0
 
 
@@ -259,7 +299,7 @@ def cmd_gui(_args: argparse.Namespace) -> int:
 
 
 COMMANDS = {"gba": cmd_gba, "build": cmd_gba, "serve": cmd_serve, "setup": cmd_setup,
-            "list": cmd_list, "library": cmd_library, "forget": cmd_forget, "import-tickets": cmd_import_tickets, "info": cmd_info,
+            "list": cmd_list, "library": cmd_library, "forget": cmd_forget, "doctor": cmd_doctor, "import-tickets": cmd_import_tickets, "info": cmd_info,
             "save-types": cmd_save_types, "gui": cmd_gui}
 
 

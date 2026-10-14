@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import ncch, romfs
-from .errors import InjectError
+from .errors import InjectError, MissingResource
 from .systems import FORWARDER_KINDS
 from .template import data_dir
 
@@ -61,15 +61,25 @@ class ForwarderTemplate:
     def load(cls, kind: str) -> "ForwarderTemplate":
         folder = templates_dir() / kind
         if not (folder / "meta.json").is_file():
-            raise InjectError(f"No {FORWARDER_KINDS.get(kind, kind)} template set up. Add one of your "
-                              f"existing injects for this system with 'vcinject setup "
-                              f"--forwarder-donor <inject.cia>' or in the GUI (Template…).")
-        meta = json.loads((folder / "meta.json").read_text())
-        return cls(kind=meta["kind"], exheader=(folder / "exheader.bin").read_bytes(),
-                   code=(folder / "code.bin").read_bytes(), logo=(folder / "logo.bin").read_bytes(),
-                   files=romfs.read((folder / "romfs.bin").read_bytes()), rom_name=meta["rom_name"],
-                   internal_name=meta["internal_name"],
-                   patch_access_desc=meta["patch_access_desc"])
+            raise MissingResource(f"forwarder:{kind}", f"No {FORWARDER_KINDS.get(kind, kind)} template "
+                                  f"set up. Add one of your existing injects for this system with "
+                                  f"'vcinject setup --forwarder-donor <inject.cia>' or in the GUI.")
+        try:
+            meta = json.loads((folder / "meta.json").read_text())
+            template = cls(kind=meta["kind"], exheader=(folder / "exheader.bin").read_bytes(),
+                           code=(folder / "code.bin").read_bytes(),
+                           logo=(folder / "logo.bin").read_bytes(),
+                           files=romfs.read((folder / "romfs.bin").read_bytes()),
+                           rom_name=meta["rom_name"], internal_name=meta["internal_name"],
+                           patch_access_desc=meta["patch_access_desc"])
+            if len(template.exheader) != 0x800 or not template.code:
+                raise ValueError("exheader or code damaged")
+        except (OSError, ValueError, KeyError, InjectError, struct.error) as exc:
+            from .template import quarantine
+            quarantine(folder)
+            raise MissingResource(f"forwarder:{kind}", f"The {FORWARDER_KINDS.get(kind, kind)} template "
+                                  f"was damaged ({exc}) and has been set aside; set it up again.") from exc
+        return template
 
     # --- extraction --------------------------------------------------------------
 

@@ -10,7 +10,7 @@ try:
     from PySide6.QtGui import (QColor, QFont, QFontDatabase, QImage, QLinearGradient, QPainter,
                                QPainterPath, QPen, QPixmap, QPolygonF, QTransform)
     from PySide6.QtWidgets import (
-        QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame,
+        QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QScrollArea, QFormLayout, QFrame,
         QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
         QMessageBox, QPlainTextEdit,
         QPushButton, QSlider, QToolButton, QVBoxLayout, QWidget,
@@ -23,12 +23,13 @@ from PIL import Image
 
 from .. import (__version__, art, artwork, gba, registry, serve, smdh, template, tickets, tools,
                 vcbanner)
+import html
 import threading
 
-from .. import builder, forwarder, library, systems
+from .. import builder, forwarder, health, library, systems
 from ..builder import (GBA_3D, GbaInjectOptions, default_product_code,
                        default_title_id, parse_title_id)
-from ..errors import InjectError
+from ..errors import InjectError, MissingResource
 
 ROM_FILTER = systems.rom_filter()
 IMAGE_FILTER = "Images (*.png *.jpg *.jpeg *.bmp *.gif *.webp);;All files (*)"
@@ -100,6 +101,8 @@ class Worker(QObject):
     def run(self):
         try:
             self.finished.emit(self._func(self.log.emit), "")
+        except MissingResource as exc:  # handed over so the GUI can offer the fix
+            self.finished.emit(exc, str(exc))
         except InjectError as exc:
             self.finished.emit(None, str(exc))
         except Exception as exc:  # surface unexpected failures instead of crashing
@@ -481,6 +484,129 @@ class QrPanel(QFrame):
 
 # --- main window ---------------------------------------------------------------
 
+class SetupDialog(QDialog):
+    """Setup assistant and health overview: every part vcinject uses, its state
+    and a button that sets it up (again). Opens by itself on first start and
+    whenever something required is missing."""
+
+    def __init__(self, window: "MainWindow"):
+        super().__init__(window)
+        self.main = window
+        self.setWindowTitle("vcinject setup")
+        self.resize(720, 640)
+        intro = QLabel(
+            "<b>Welcome to vcinject.</b> Everything below is checked on every start; "
+            "missing or damaged parts can be set up again here at any time.<br>"
+            "<b>Required</b> for every build: the tools and the GBA base template. "
+            "Everything else is optional and unlocks more systems and the VC Console Look.",
+            wordWrap=True)
+        self.body = QWidget()
+        self.grid = QGridLayout(self.body)
+        self.grid.setColumnStretch(1, 1)
+        scroll = QScrollArea(widgetResizable=True)
+        scroll.setWidget(self.body)
+        self.log = QPlainTextEdit(readOnly=True, placeholderText="Setup log")
+        self.log.setMaximumHeight(130)
+        self.log.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
+        buttons = QDialogButtonBox(QDialogButtonBox.Close, rejected=self.accept)
+        layout = QVBoxLayout(self)
+        layout.addWidget(intro)
+        layout.addWidget(scroll, 1)
+        layout.addWidget(self.log)
+        layout.addWidget(buttons)
+        self.refresh()
+
+    def refresh(self):
+        while self.grid.count():
+            item = self.grid.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        row = 0
+
+        def section(text):
+            nonlocal row
+            label = QLabel(text, objectName="cardTitle")
+            self.grid.addWidget(label, row, 0, 1, 3)
+            row += 1
+
+        def line(check: health.Check, actions):
+            nonlocal row
+            mark = "✅" if check.ok else ("❌" if check.required else "➖")
+            self.grid.addWidget(QLabel(mark), row, 0)
+            detail = "" if check.ok else f"<br><small>{html.escape(check.detail)}</small>"
+            text = QLabel(f"{html.escape(check.label)}{detail}", wordWrap=True)
+            self.grid.addWidget(text, row, 1)
+            box = QHBoxLayout()
+            for caption, handler in actions:
+                box.addWidget(QPushButton(caption, clicked=handler))
+            holder = QWidget()
+            holder.setLayout(box)
+            self.grid.addWidget(holder, row, 2)
+            row += 1
+
+        checks = {c.resource: c for c in health.check()}
+        section("Required")
+        for name in tools.TOOLS:
+            c = checks[f"tool:{name}"]
+            line(c, [] if c.ok else [("Build tools", self.build_tools)])
+        c = checks["gba-template"]
+        line(c, [("Download", lambda: self.run(lambda log: template.download())),
+                 ("From title…", lambda: self.pick("gba-template"))])
+
+        section("VC Console Look (3D banner per console, optional)")
+        for key, system in systems.SYSTEMS.items():
+            c = checks[f"vclook:{key}"]
+            actions = [("Choose title…", lambda key=key: self.pick(f"vclook:{key}"))]
+            if key in vcbanner.DERIVED_COLORS:
+                actions.append(("Create from GBA look", lambda key=key: self.run(
+                    lambda log, key=key: vcbanner.derive_look(key))))
+            line(c, actions)
+
+        section("Emulator templates (SNES, NES, GB/GBC, Mega Drive, optional)")
+        for kind in systems.FORWARDER_KINDS:
+            line(checks[f"forwarder:{kind}"],
+                 [("Choose inject…", lambda kind=kind: self.pick(f"forwarder:{kind}"))])
+
+        section("Library")
+        folder = self.main.library.settings.value("library/folder", "")
+        ok = bool(folder) and Path(folder).is_dir()
+        line(health.Check("library", "ROM folder", ok, False, folder or "not chosen"),
+             [("Choose folder…", self._choose_library)])
+        self.grid.setRowStretch(row, 1)
+
+    def _choose_library(self):
+        self.main.library.choose_folder()
+        self.refresh()
+
+    def pick(self, resource: str):
+        path, _ = QFileDialog.getOpenFileName(self, health.question(resource), "", INJECT_FILTER)
+        if path:
+            self.run(lambda log: health.heal(resource, lambda _q: Path(path), log))
+
+    def build_tools(self):
+        if not health.can_build_tools():
+            QMessageBox.warning(self, "Tools", "Building the tools needs git, make and a C/C++ "
+                                "compiler.\nmacOS: run 'xcode-select --install' in Terminal.\n"
+                                "Linux: install build-essential and git.")
+            return
+        self.run(lambda log: health.build_tools(log))
+
+    def run(self, func):
+        self.setEnabled(False)
+
+        def done(_result, error):
+            self.setEnabled(True)
+            if error:
+                self.log.appendPlainText(f"Error: {error}")
+            else:
+                self.log.appendPlainText("Done.")
+            self.refresh()
+            self.main.refresh_status()
+            self.main._apply_artwork()
+
+        Task(self, func, done, self.log.appendPlainText)
+
+
 class LibraryPanel(QFrame):
     """ROM folder (incl. sub folders) as a clickable list with covers."""
     rom_chosen = Signal(object)          # Path
@@ -801,7 +927,7 @@ class MainWindow(QMainWindow):
         self.log_view.setMinimumHeight(110)
 
         self.status_label = QLabel(objectName="muted")
-        self.template_button = QPushButton("Template…", clicked=self.setup_template)
+        self.template_button = QPushButton("Setup…", clicked=self.open_setup)
         self.tickets_button = QPushButton("Import tickets…", clicked=self.import_tickets)
         status_row = QHBoxLayout()
         status_row.addWidget(self.status_label, 1)
@@ -1076,6 +1202,45 @@ class MainWindow(QMainWindow):
             self.load_rom(self.rom_path)
         self.refresh_status()
 
+    def open_setup(self):
+        SetupDialog(self).exec()
+        self.refresh_status()
+
+    def first_run_check(self):
+        """Self-healing on start: open the setup when something required is missing
+        or vcinject runs for the first time."""
+        settings = self.library.settings
+        missing_required = [c for c in health.check() if c.required and not c.ok]
+        if missing_required or not settings.value("setup/done", False, type=bool):
+            settings.setValue("setup/done", True)
+            self.open_setup()
+
+    def heal_and_retry(self, error: MissingResource):
+        """A build hit a missing part: offer exactly that fix, then build again."""
+        answer = QMessageBox.question(self, "Something is missing",
+                                      f"{error}\n\nSet it up now and build again?")
+        if answer != QMessageBox.Yes:
+            return
+        resource = error.resource
+
+        def ask(question):
+            path, _ = QFileDialog.getOpenFileName(self, question, "", INJECT_FILTER)
+            return Path(path) if path else None
+
+        needs_file = resource.startswith(("vclook:", "forwarder:"))
+        donor = ask(health.question(resource)) if needs_file else None
+        if needs_file and donor is None and not (resource.startswith("vclook:") and
+                                                 resource.split(":")[1] in vcbanner.DERIVED_COLORS):
+            return
+        retry_qr = self._qr_after_build
+
+        def fix(log):
+            if not health.heal(resource, (lambda _q: donor) if donor else None, log):
+                raise InjectError(f"{error} (still missing)")
+
+        self._after_heal = lambda: self.build(then_qr=retry_qr)
+        self._run(fix, "Fixed, building again...")
+
     def setup_template(self):
         box = QMessageBox(self)
         box.setWindowTitle("GBA VC template")
@@ -1229,11 +1394,17 @@ class MainWindow(QMainWindow):
             button.setEnabled(True)
         self.build_button.setText("Build CIA")
         self.refresh_status()
-        if error:
+        if isinstance(result, MissingResource):
+            self.log_view.appendPlainText(f"Missing: {error}")
+            self.heal_and_retry(result)
+        elif error:
             self.log_view.appendPlainText(f"Error: {error}")
             QMessageBox.critical(self, "Failed", error)
         elif success_message:
             self.log_view.appendPlainText(success_message)
+            after, self._after_heal = getattr(self, "_after_heal", None), None
+            if after:
+                QTimer.singleShot(0, after)
         elif result is not None:
             self.last_output = result.output_path
             self.library.refresh_rom(self.rom_path)
@@ -1281,6 +1452,7 @@ def main() -> int:
     app.setStyleSheet(STYLESHEET)
     window = MainWindow()
     window.show()
+    QTimer.singleShot(300, window.first_run_check)
     return app.exec()
 
 

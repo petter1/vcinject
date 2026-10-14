@@ -27,7 +27,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from . import cgfx, ncch
-from .errors import InjectError
+from .errors import InjectError, MissingResource
 from .template import data_dir
 
 SCREEN_TEXTURE = "COMMON1"
@@ -140,10 +140,17 @@ def _load(path: str, mtime: float) -> cgfx.Cbmd:
 
 def load_template(system: str = "gba") -> cgfx.Cbmd:
     if not is_installed(system):
-        raise InjectError(f"VC Console Look for {system.upper()} not set up. Use 'vcinject setup "
-                          f"--banner-donor <a {system.upper()} VC title or inject.cia>'.")
+        raise MissingResource(f"vclook:{system}", f"VC Console Look for {system.upper()} not set up. "
+                              f"Use 'vcinject setup --banner-donor <a {system.upper()} VC title "
+                              f"or inject.cia>'.")
     path = template_path(system)
-    return _load(str(path), path.stat().st_mtime)
+    try:
+        return _load(str(path), path.stat().st_mtime)
+    except (InjectError, ValueError, IndexError, struct.error) as exc:
+        from .template import quarantine
+        quarantine(path)
+        raise MissingResource(f"vclook:{system}", f"The VC Console Look for {system.upper()} was "
+                              f"damaged ({exc}) and has been set aside; set it up again.") from exc
 
 
 # --- the "Virtual Console" plate ---------------------------------------------------

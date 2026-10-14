@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import ncch
-from .errors import InjectError
+from .errors import InjectError, MissingResource
 
 _VCOVEN_BASE = ("https://raw.githubusercontent.com/vedoot/vcoven/"
                 "9aed5e2b31d5f19eb76098153bfbfa38ca6e3dd5/template/")
@@ -51,9 +51,25 @@ class GbaTemplate:
         directory = directory or template_dir()
         missing = [name for name in _FILES if not (directory / name).is_file()]
         if missing:
-            raise InjectError("No GBA VC template installed. Run 'vcinject setup' "
-                              "(download) or 'vcinject setup --donor <title.cia>'.")
-        return cls(*((directory / name).read_bytes() for name in _FILES))
+            raise MissingResource("gba-template", "No GBA VC template installed. Run 'vcinject "
+                                  "setup' (download) or 'vcinject setup --donor <title.cia>'.")
+        template = cls(*((directory / name).read_bytes() for name in _FILES))
+        problem = template.problem()
+        if problem:
+            quarantine(directory)
+            raise MissingResource("gba-template", f"The GBA VC template was damaged ({problem}) "
+                                  "and has been set aside; set it up again.")
+        return template
+
+    def problem(self) -> str | None:
+        """What is wrong with the files, or None when they look usable."""
+        if len(self.exheader) != 0x800:
+            return "exheader has the wrong size"
+        if self.romfs[:4] != b"IVFC":
+            return "RomFS is not an IVFC image"
+        if not self.logo:
+            return "boot logo is empty"
+        return None
 
     def save(self, directory: Path | None = None) -> Path:
         directory = directory or template_dir()
@@ -65,6 +81,19 @@ class GbaTemplate:
 
 def is_installed() -> bool:
     return all((template_dir() / name).is_file() for name in _FILES)
+
+
+def quarantine(path: Path) -> Path | None:
+    """Move a damaged file or folder aside (``*.broken-<time>``) so it gets set up
+    again instead of failing every time; returns where it went."""
+    import time
+
+    path = Path(path)
+    if not path.exists():
+        return None
+    target = path.with_name(f"{path.name}.broken-{int(time.time())}")
+    path.rename(target)
+    return target
 
 
 def download() -> GbaTemplate:

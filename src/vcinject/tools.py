@@ -6,7 +6,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from .errors import InjectError
+from .errors import InjectError, MissingResource
 
 TOOLS = ("makerom", "bannertool")
 
@@ -35,7 +35,7 @@ def find_tool(name: str) -> Path | None:
 def require_tool(name: str) -> Path:
     path = find_tool(name)
     if path is None:
-        raise InjectError(f"'{name}' not found. Build it with scripts/build-tools.sh "
+        raise MissingResource(f"tool:{name}", f"'{name}' not found. Build it with scripts/build-tools.sh "
                           f"or put it on your PATH.")
     return path
 
