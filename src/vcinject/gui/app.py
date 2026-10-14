@@ -220,17 +220,23 @@ class ThreeDsPreview(QWidget):
         self.update()
 
     def _draw_block(self, p: QPainter, top: QRectF):
-        """Rotating block like the HOME Menu renders newer NSUI GBA banners."""
+        """Rotating block like the HOME Menu renders newer NSUI GBA banners.
+
+        The block is drawn as a stack of rounded slices; slices near the front
+        and back shrink along a quarter circle, which gives the rounded edges.
+        """
         import math
 
         face, plate, side = self.block
-        w, h = face.width() * 1.15, face.height() * 1.15
-        thickness, focal = 14.0, 420.0
-        center = QPointF(top.center().x(), top.top() + 30 + h / 2)
+        fw, fh = face.width() * 1.15, face.height() * 1.15
+        thickness = fw * 0.28
+        r = thickness * 0.45  # radius of the rounded edge profile
+        focal = 420.0
+        center = QPointF(top.center().x(), top.top() + 34 + fh / 2)
         theta = math.radians(self.angle)
         cos, sin = math.cos(theta), math.sin(theta)
 
-        def quad(z: float) -> tuple[QPolygonF, float]:
+        def quad(z: float, w: float, h: float) -> tuple[QPolygonF, float]:
             points, depth = [], 0.0
             for x, y in ((-w / 2, -h / 2), (w / 2, -h / 2), (w / 2, h / 2), (-w / 2, h / 2)):
                 xr, zr = x * cos + z * sin, -x * sin + z * cos
@@ -239,15 +245,22 @@ class ThreeDsPreview(QWidget):
                 depth += zr / 4
             return QPolygonF(points), depth
 
-        source = QPolygonF([QPointF(0, 0), QPointF(w, 0), QPointF(w, h), QPointF(0, h)])
+        half = thickness / 2
+        steps = 64
         layers = []
-        steps = 12
         for i in range(steps + 1):
-            z = -thickness / 2 + thickness * i / steps
-            poly, depth = quad(z)
+            z = -half + thickness * i / steps
+            d = max(0.0, abs(z) - (half - r))  # distance into the rounded part
+            inset = r - math.sqrt(max(0.0, r * r - d * d))
+            w, h = fw - 2 * inset, fh - 2 * inset
+            poly, depth = quad(z, w, h)
             kind = "front" if i == 0 else "back" if i == steps else "side"
-            layers.append((depth, kind, poly))
-        for depth, kind, poly in sorted(layers, key=lambda layer: -layer[0]):
+            # slices facing more sideways (larger d) are a bit darker
+            shade = 100 + int(15 * d / r + 18 * abs(sin))
+            layers.append((depth, kind, poly, w, h, shade))
+
+        for depth, kind, poly, w, h, shade in sorted(layers, key=lambda layer: -layer[0]):
+            source = QPolygonF([QPointF(0, 0), QPointF(w, 0), QPointF(w, h), QPointF(0, h)])
             transform = QTransform()
             if not QTransform.quadToQuad(source, poly, transform):
                 continue
@@ -255,14 +268,23 @@ class ThreeDsPreview(QWidget):
             p.setTransform(transform, True)
             target = QRectF(0, 0, w, h)
             path = QPainterPath()
-            path.addRoundedRect(target, 10, 10)
-            if kind == "front" and cos > 0:
-                p.drawImage(target, face)
-            elif kind == "back" and cos < 0:
-                p.drawImage(target, face.mirrored(True, False))
-            else:
-                p.fillPath(path, side.darker(100 + int(25 * abs(sin))))
+            path.addRoundedRect(target, 12, 12)
+            color = side.darker(shade)
+            p.setPen(QPen(color, 1.5))  # closes hairline gaps between slices
+            p.setBrush(color)
+            p.drawPath(path)
             p.restore()
+            if kind in ("front", "back") and abs(cos) > 0.08 and (cos > 0) == (kind == "front"):
+                # the picture covers the whole face, like the model's texture
+                full, _ = quad(-half if kind == "front" else half, fw, fh)
+                source_full = QPolygonF([QPointF(0, 0), QPointF(fw, 0), QPointF(fw, fh), QPointF(0, fh)])
+                t = QTransform()
+                if QTransform.quadToQuad(source_full, full, t):
+                    p.save()
+                    p.setTransform(t, True)
+                    image = face if kind == "front" else face.mirrored(True, False)
+                    p.drawImage(QRectF(0, 0, fw, fh), image)
+                    p.restore()
         p.drawImage(QRectF(top.center().x() - 128, top.top() + 168, 256, 64), plate)
 
     def _screen(self, p: QPainter, rect: QRectF, top: str, bottom: str):

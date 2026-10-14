@@ -350,8 +350,7 @@ def block_parts(screen: Image.Image, title: str, year: str | None, publisher: st
         return None
     face = compose_screen(screen_tex, screen)
     face = face.crop(face.getchannel("A").getbbox())
-    side = tuple(max(0, c - 45) for c in body_color())
-    return face, plate_preview(title, year, publisher, lang), side
+    return face, plate_preview(title, year, publisher, lang), body_color()
 
 
 def _block_mockup(face: Image.Image, title: str, year: str | None, publisher: str,
