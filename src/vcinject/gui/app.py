@@ -1,6 +1,7 @@
 """Qt GUI for vcinject, modelled on NSUI's GBA VC injector page."""
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -1426,7 +1427,12 @@ def main() -> int:
     window = MainWindow()
     window.show()
     QTimer.singleShot(300, window.first_run_check)
-    return app.exec()
+    code = app.exec()
+    # Library analysis threads may still be downloading covers; they only read, so end
+    # right away instead of letting Python finalize under them (avoids shutdown errors).
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
 
 
 if __name__ == "__main__":
