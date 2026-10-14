@@ -153,6 +153,12 @@ background (once per session, can be switched off in the **↻** menu),
 right-click → *Reload cover and info* does it on demand, and **↻ → Reload all
 covers and info** refreshes the whole library.
 
+Under the ROM, vcinject shows its **CRC32** and cartridge **serial** – the
+keys No-Intro and libretro identify a dump by (libretro has no running index
+number) – with links to the release's entry in the libretro database and to
+the game's page on RetroGamesNexus; both are also in the right-click menu and
+the Details view. Games without any cover get a box in their console's style.
+
 **Show missing games** in the library lists every game of the system from the
 No-Intro database below your ROMs, with a region filter and an
 "owned X of Y" count. Covers of missing games are loaded for what is on screen

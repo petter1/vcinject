@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
-from .. import library, systems
+from .. import art, library, systems
 from ..errors import InjectError
 from .qtutil import gui_settings, to_qimage
 
@@ -56,6 +56,8 @@ class Entry:
     folder: str = ""
     size: int = 0
     status: str = ""
+    serial: str = ""
+    crc: str = ""
 
     @property
     def subtitle(self) -> str:
@@ -201,8 +203,9 @@ class DetailsView(QTreeWidget):
     scrolled = Signal()
     sort_requested = Signal(str)
 
-    COLUMNS = ["Title", "System", "Year", "Series", "Release", "Folder", "Size", "Status"]
-    SORTABLE = {0: "name", 1: "system", 2: "year", 5: "folder"}
+    COLUMNS = ["Title", "System", "Year", "Series", "Release", "Serial", "CRC32", "Folder", "Size",
+               "Status"]
+    SORTABLE = {0: "name", 1: "system", 2: "year", 7: "folder"}
     ICON = QSize(26, 32)
 
     def __init__(self, panel: "LibraryPanel"):
@@ -283,8 +286,8 @@ class DetailsView(QTreeWidget):
 
     def _fill(self, item: QTreeWidgetItem, entry: Entry):
         size = f"{entry.size / 1024 / 1024:.1f} MiB" if entry.size else ""
-        values = [entry.title, entry.system, entry.year, entry.series, entry.release, entry.folder,
-                  size, entry.status]
+        values = [entry.title, entry.system, entry.year, entry.series, entry.release, entry.serial,
+                  entry.crc, entry.folder, size, entry.status]
         grey = self.palette().placeholderText().color()
         for column, value in enumerate(values):
             item.setText(column, value)
@@ -296,7 +299,10 @@ class DetailsView(QTreeWidget):
             item.setFont(0, font)
         item.setToolTip(0, entry.tooltip)
         item.setIcon(0, self.panel.icon(entry, self.ICON))
-        item.setTextAlignment(6, Qt.AlignRight | Qt.AlignVCenter)
+        item.setTextAlignment(8, Qt.AlignRight | Qt.AlignVCenter)
+        mono = QFont("Menlo")
+        mono.setStyleHint(QFont.Monospace)
+        item.setFont(6, mono)
 
     def set_current(self, key: str):
         item = self._items.get(key)
@@ -487,8 +493,6 @@ class CoverFlowView(QWidget):
             p.save()
             p.setTransform(transform)
             target = QRectF(0, 0, w, h)
-            if self.panel._cover_of(self.flat[i]) is None and self.flat[i].kind != "stack":
-                p.fillRect(target, QColor(44, 46, 54))  # no cover yet: a dark card
             p.drawPixmap(target, pix, QRectF(pix.rect()))
             # reflection
             p.save()
@@ -586,6 +590,7 @@ class LibraryPanel(QFrame):
         self._expanded: set[str] = set()                 # open stacks
         self._entries: list[Entry] = []
         self._icons: dict[tuple, QPixmap] = {}
+        self._placeholders: dict[str, Image.Image] = {}  # console -> box without cover
         language = QLocale.system().name().split("_")[0]
         self._prefer = tuple(t for t in (library.LANGUAGE_REGION.get(language), "Europe") if t)
 
@@ -939,7 +944,8 @@ class LibraryPanel(QFrame):
         region = rom.release[len(rom.title):].strip() if rom.release else ""
         return Entry(f"rom:{rom.path}", "rom", rom.title, details, "\n".join(tip), rom.path, rom,
                      system=rom.system.key.upper(), year=rom.year or "", series=series,
-                     release=region, folder=rom.folder, size=rom.size, status=" · ".join(status))
+                     release=region, folder=rom.folder, size=rom.size, status=" · ".join(status),
+                     serial=rom.serial, crc=rom.crc)
 
     def _missing_entry(self, game: library.CatalogGame) -> Entry:
         details = [game.system.key.upper()] + ([game.year] if game.year else []) + ["missing"]
@@ -1087,19 +1093,16 @@ class LibraryPanel(QFrame):
         return None
 
     def _pixmap(self, cover, entry: Entry, size: QSize) -> QPixmap:
-        if cover is not None:
-            return QPixmap.fromImage(to_qimage(cover)).scaled(size, Qt.KeepAspectRatio,
-                                                              Qt.SmoothTransformation)
-        pix = QPixmap(size)
-        pix.fill(Qt.transparent)
-        p = QPainter(pix)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(QPen(self.palette().mid().color(), 1.5, Qt.DashLine))
-        p.drawRoundedRect(QRectF(1, 1, pix.width() - 2, pix.height() - 2), 6, 6)
-        p.setFont(QFont(p.font().family(), max(7, size.height() // 7), QFont.Bold))
-        p.drawText(pix.rect(), Qt.AlignCenter, entry.system or "ROM")
-        p.end()
-        return pix
+        if cover is None:  # nothing found anywhere: a box in the console's style
+            key = (entry.rom.system.key if entry.rom else entry.game.system.key if entry.game
+                   else "")
+            cover = self._placeholders.get(key)
+            if cover is None:
+                cover = self._placeholders[key] = art.placeholder_cover(key)
+            if entry.kind == "missing":
+                cover = self._style_missing(cover)
+        return QPixmap.fromImage(to_qimage(cover)).scaled(size, Qt.KeepAspectRatio,
+                                                          Qt.SmoothTransformation)
 
     def _stack_pixmap(self, entry: Entry, size: QSize) -> QPixmap:
         """Up to three covers fanned out like a pile of boxes."""
@@ -1187,7 +1190,15 @@ class LibraryPanel(QFrame):
             menu.exec(global_pos)
             return
         if entry.kind == "missing":
+            game = entry.game
             menu.addAction("Reload cover", lambda: self._reload_missing_cover(entry))
+            menu.addSeparator()
+            menu.addAction("Open on libretro (database entry)", lambda: open_game_page(
+                self, "libretro", game.system, game.releases[0] if game.releases else None,
+                game.title))
+            menu.addAction("Open on RetroGamesNexus", lambda: open_game_page(
+                self, "nexus", game.system, game.releases[0] if game.releases else None,
+                game.title))
             menu.exec(global_pos)
             return
         if entry.kind != "rom":
@@ -1211,6 +1222,11 @@ class LibraryPanel(QFrame):
             menu.addAction(f"Versions and duplicates ({len(group)})…",
                            lambda: VersionsDialog(self, rom.path).exec())
         menu.addSeparator()
+        if rom.method != "retrogamesnexus":
+            menu.addAction("Open on libretro (database entry)", lambda: open_game_page(
+                self, "libretro", rom.system, rom.release, rom.title))
+        menu.addAction("Open on RetroGamesNexus", lambda: open_game_page(
+            self, "nexus", rom.system, rom.release, rom.title))
         menu.addAction("Show in folder",
                        lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(rom.path.parent))))
         menu.exec(global_pos)
@@ -1485,6 +1501,26 @@ class LibraryPanel(QFrame):
         self.settings.setValue("library/missing_style", self.missing_style.currentData())
         self._icons = {}
         self._refresh()
+
+
+def open_game_page(parent: QWidget, site: str, system: systems.System, release: str | None,
+                   title: str):
+    """Open the game on libretro (its database entry) or on RetroGamesNexus."""
+    QApplication.setOverrideCursor(Qt.WaitCursor)
+    try:
+        if site == "libretro":
+            url = library.libretro_url(release, system)
+            missing = f"{release or title} is not in the libretro database (No-Intro)."
+        else:
+            language = QLocale.system().name().split("_")[0]
+            url = library.nexus_url(title, system, language, release)
+            missing = f"{title} was not found on RetroGamesNexus."
+    finally:
+        QApplication.restoreOverrideCursor()
+    if url:
+        QDesktopServices.openUrl(QUrl(url))
+    else:
+        QMessageBox.information(parent, "Not found", missing)
 
 
 def _game_key(game: library.CatalogGame) -> str:

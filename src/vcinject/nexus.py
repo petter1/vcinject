@@ -165,6 +165,16 @@ def find(titles: list[str], system_key: str, refresh: bool = False) -> Game | No
     return None
 
 
+# languages the site has pages in (its default is English, without a prefix)
+LANGUAGES = {"de", "fr", "es", "it", "nl", "pt", "ru", "ja", "ko", "zh", "zh-TW", "hi", "fil", "vi",
+             "th"}
+
+
+def page_url(slug: str, language: str = "") -> str:
+    prefix = f"/{language}" if language in LANGUAGES else ""
+    return f"{BASE}{prefix}/games/{slug}"
+
+
 def cover(found: Game, refresh: bool = False) -> Image.Image | None:
     if not found.image_url:
         return None

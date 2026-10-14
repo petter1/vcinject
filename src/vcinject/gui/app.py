@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+import zlib
 from pathlib import Path
 
 try:
@@ -27,7 +28,7 @@ from .. import builder, forwarder, health, library, systems
 from ..builder import (GBA_3D, GbaInjectOptions, default_product_code,
                        default_title_id, parse_title_id)
 from ..errors import InjectError, MissingResource
-from .libraryview import LibraryPanel, LibraryWindow, VersionsDialog
+from .libraryview import LibraryPanel, LibraryWindow, VersionsDialog, open_game_page
 from .qtutil import gui_settings, to_pixmap, to_qimage  # noqa: F401 (gui_settings re-exported)
 
 ROM_FILTER = systems.rom_filter()
@@ -143,6 +144,10 @@ class RomDropZone(QFrame):
         self.details.setWordWrap(True)
         self.release = QLabel(objectName="muted")
         self.release.setWordWrap(True)
+        # CRC32 / serial and links to libretro and RetroGamesNexus
+        self.ids = QLabel(objectName="muted")
+        self.ids.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        self.ids.setVisible(False)
         # several versions of the game in the library (languages, copies): pick one
         self.version_row = QWidget()  # hidden as a whole: hidden children alone upset the layout
         self.version_row.setVisible(False)
@@ -160,6 +165,7 @@ class RomDropZone(QFrame):
         text.addWidget(self.headline)
         text.addWidget(self.details)
         text.addWidget(self.release)
+        text.addWidget(self.ids)
         text.addWidget(self.version_row)
         text.addStretch(1)
         layout = QHBoxLayout(self)
@@ -654,6 +660,7 @@ class MainWindow(QMainWindow):
         self.library.open_window.connect(self.open_library_window)
         self.library.rom_renamed.connect(self._rom_renamed)
         self.library.rom_refreshed.connect(self._rom_refreshed)
+        self.drop.ids.linkActivated.connect(self._open_game_page)
         self.drop.versions.currentIndexChanged.connect(
             lambda: self.drop.versions.currentData() and self.load_rom(self.drop.versions.currentData()))
         self.drop.duplicates.clicked.connect(self.show_duplicates)
@@ -724,6 +731,27 @@ class MainWindow(QMainWindow):
         elif self.rom_path is not None:
             self._show_versions(self.rom_path)
 
+    def _show_ids(self):
+        """CRC32 and serial of the open ROM, with links once the release is known."""
+        if self.rom is None or self.system is None:
+            self.drop.ids.setVisible(False)
+            return
+        crc = f"{zlib.crc32(self.system.strip_header(self.rom.data)) & 0xFFFFFFFF:08X}"
+        match = self.found.match if self.found else None
+        serial = getattr(self.rom, "game_code", "") or (
+            artwork.serial_of(match.name, self.system.database) if match else "")
+        parts = [f"CRC32 {crc}"] + ([f"Serial {serial}"] if serial else [])
+        if match and match.method != "retrogamesnexus":
+            parts.append('<a href="libretro">libretro ↗</a>')
+        parts.append('<a href="nexus">RetroGamesNexus ↗</a>')
+        self.drop.ids.setText(" · ".join(parts))
+        self.drop.ids.setVisible(True)
+
+    def _open_game_page(self, site: str):
+        match = self.found.match if self.found else None
+        title = (match.name if match else library.plain_stem(self.rom_path)).split(" (", 1)[0]
+        open_game_page(self, site, self.system, match.name if match else None, title)
+
     def _rom_refreshed(self, path: Path):
         """The library checked the open ROM online again: show what it found."""
         if path == self.rom_path and not self._busy:
@@ -786,6 +814,8 @@ class MainWindow(QMainWindow):
         self.drop.set_cover(None, system.key.upper())
         self.title_edit.setText(library.plain_stem(path))
         self._show_versions(path)
+        self.found = artwork.Artwork()
+        self._show_ids()
         # values of the previous ROM must not leak into this one
         self.released_edit.clear()
         self.long_title_edit.clear()
@@ -834,7 +864,12 @@ class MainWindow(QMainWindow):
         else:
             self.drop.release.setText("Release not in the No-Intro database")
             self.art_status.setText("No artwork found; using generated images.")
-        self.drop.set_cover(result.images.get("boxart") or result.images.get("title"))
+        cover = result.images.get("boxart") or result.images.get("title")
+        if cover is None and self.system is not None:  # nothing anywhere: the console's box
+            cover = art.placeholder_cover(self.system.key, self.title_edit.text()
+                                          or library.plain_stem(self.rom_path))
+        self.drop.set_cover(cover)
+        self._show_ids()
         self._apply_artwork()
         if self._qr_when_ready:
             self._qr_when_ready = False

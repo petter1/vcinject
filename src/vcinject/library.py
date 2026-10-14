@@ -36,6 +36,8 @@ class LibraryRom:
     built: list[registry.Entry] = field(default_factory=list)
     method: str = ""                       # how release was found: crc, serial, ... retrogamesnexus
     family: str = ""                       # serial without region letter (GBA "BPE")
+    crc: str = ""                          # CRC32 as No-Intro / libretro identify the dump
+    serial: str = ""                       # cartridge serial ("BPED"), if the system has one
 
     @property
     def title(self) -> str:
@@ -157,7 +159,8 @@ def _save_thumb(name: str, image: Image.Image) -> None:
     image.convert("RGB").save(path, optimize=True)
 
 
-_FIELDS = ("sha1", "release", "method", "family", "year")
+_FIELDS = ("sha1", "release", "method", "family", "year", "crc", "serial")
+_TEXT_FIELDS = ("sha1", "method", "family", "crc", "serial")  # "" rather than None
 
 
 def from_index(rom: LibraryRom) -> bool:
@@ -167,10 +170,11 @@ def from_index(rom: LibraryRom) -> bool:
     except OSError:
         return False
     record = _load_index()["files"].get(str(rom.path))
-    if not record or record.get("size") != stat.st_size or record.get("mtime") != stat.st_mtime:
+    if not record or record.get("size") != stat.st_size or record.get("mtime") != stat.st_mtime \
+            or "crc" not in record:  # entries from before CRC32 was kept: read once more
         return False
     for name in _FIELDS:
-        setattr(rom, name, record.get(name) or ("" if name in ("sha1", "method", "family") else None))
+        setattr(rom, name, record.get(name) or ("" if name in _TEXT_FIELDS else None))
     rom.cover = _load_thumb(rom.sha1) if record.get("cover") else None
     rom.built = _built(rom.sha1)
     return True
@@ -215,11 +219,14 @@ def analyze(rom: LibraryRom, online: bool = True, cover: bool = True,
         return rom
     data = systems.read_rom(rom.path)
     rom.sha1 = hashlib.sha1(data).hexdigest()
+    rom.crc = f"{zlib.crc32(rom.system.strip_header(data)) & 0xFFFFFFFF:08X}"
+    if rom.system.key == "gba" and re.fullmatch(r"[A-Z0-9]{4}", data[0xAC:0xB0].decode("ascii", "replace")):
+        rom.serial = data[0xAC:0xB0].decode("ascii")
     rom.built = _built(rom.sha1)
     known = None if refresh else _by_checksum(rom.sha1)
-    if known is not None and (known.get("release") or not online):
+    if known is not None and "crc" in known and (known.get("release") or not online):
         for name in _FIELDS[1:]:
-            setattr(rom, name, known.get(name) or ("" if name in ("method", "family") else None))
+            setattr(rom, name, known.get(name) or ("" if name in _TEXT_FIELDS else None))
         rom.cover = _load_thumb(rom.sha1) if known.get("cover") else None
         _remember(rom)
         return rom
@@ -240,6 +247,7 @@ def analyze(rom: LibraryRom, online: bool = True, cover: bool = True,
             rom.release, rom.method = match.name, match.method
             families = sorted(s[:3] for s in db.serials.get(match.name, ()) if len(s) == 4)
             rom.family = families[0] if families else ""
+            rom.serial = rom.serial or (sorted(db.serials.get(match.name, ())) or [""])[0]
             crcs = db.sibling_crcs(match.name)
             rom.year = artwork._metadata("releaseyear", crcs, rom.system.database)
             if cover:
@@ -271,7 +279,7 @@ def refresh(rom: LibraryRom) -> bool:
         analyze(fresh, refresh=True)
     except (InjectError, OSError):
         return False
-    for name in ("sha1", "release", "year", "method", "family", "cover", "built"):
+    for name in ("sha1", "release", "year", "method", "family", "crc", "serial", "cover", "built"):
         setattr(rom, name, getattr(fresh, name))
     save_index()
     return True
@@ -607,3 +615,30 @@ def clean_names(roms: list[LibraryRom]) -> list[tuple[LibraryRom, str]]:
 def set_self_dumped(rom: LibraryRom, flag: bool) -> Path:
     stem = clean_stem(rom, flag) or (plain_stem(rom.path) + (SELF_DUMPED_SUFFIX if flag else ""))
     return rename(rom, stem)
+
+
+# --- links ------------------------------------------------------------------------
+
+def libretro_url(release: str | None, system: systems.System) -> str | None:
+    """The release's entry in libretro-database (No-Intro data)."""
+    return artwork.database_url(release, system.database) if release else None
+
+
+def nexus_url(title: str, system: systems.System, language: str = "",
+              release: str | None = None) -> str | None:
+    """The game's page on RetroGamesNexus (may download its game list once). The
+    site uses English titles, so other regions' names of ``release`` are tried too
+    ("Smaragd-Edition" is listed as "Pokemon Emerald")."""
+    from . import nexus
+    titles = [title]
+    if release:
+        try:
+            db = artwork.ReleaseDatabase.load(system=system.database)
+            titles += [n.split(" (", 1)[0] for n in db.siblings(release)[:8]]
+        except InjectError:
+            pass
+    try:
+        game = nexus.find(list(dict.fromkeys(titles)), system.key)
+    except InjectError:
+        return None
+    return nexus.page_url(game.slug, language) if game else None

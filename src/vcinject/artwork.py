@@ -95,8 +95,13 @@ class ReleaseDatabase:
         self.crcs: dict[str, list[str]] = {}
         self.serials: dict[str, set[str]] = {}
         self.names: list[str] = []
+        self.lines: dict[str, int] = {}  # line of each entry in the DAT (for links)
+        line, last = 1, 0
         for game in _GAME_RE.finditer(text):
             name, body = game.group("name"), game.group("body")
+            line += text.count("\n", last, game.start())
+            last = game.start()
+            self.lines[name] = line
             self.names.append(name)
             self.crcs[name] = [crc.upper() for crc in _CRC_RE.findall(body)]
             for crc in self.crcs[name]:
@@ -180,6 +185,27 @@ def _release_rank(name: str, wanted_tags: set[str] = frozenset()) -> tuple[int, 
 def _normalize(name: str) -> str:
     name = re.sub(r"\s*[\(\[].*?[\)\]]", "", name)  # drop (Region) [tags]
     return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+def database_url(name: str, system: str = SYSTEM) -> str | None:
+    """The release's entry in libretro-database on GitHub (libretro has no game
+    pages; this is where the release, its checksums and serial are listed)."""
+    try:
+        line = ReleaseDatabase.load(system=system).lines.get(name)
+    except InjectError:
+        return None
+    if line is None:
+        return None
+    return ("https://github.com/libretro/libretro-database/blob/master/metadat/no-intro/"
+            f"{urllib.parse.quote(system)}.dat#L{line}")
+
+
+def serial_of(name: str, system: str = SYSTEM) -> str:
+    try:
+        serials = ReleaseDatabase.load(system=system).serials.get(name, ())
+    except InjectError:
+        return ""
+    return sorted(serials)[0] if serials else ""
 
 
 def thumbnail_url(name: str, kind: str, system: str = SYSTEM) -> str:
