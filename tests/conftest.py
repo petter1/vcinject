@@ -17,6 +17,24 @@ def no_network(monkeypatch, tmp_path):
 
     monkeypatch.setattr(artwork, "_download", offline)
     monkeypatch.setattr(artwork, "conditional_get", offline)
+    yield
+    _finish_library_threads()
+
+
+def _finish_library_threads():
+    """Stop library scans a GUI test started, so they cannot run into the next
+    test (which may have replaced the databases they use)."""
+    import sys
+    import threading
+
+    view = sys.modules.get("vcinject.gui.libraryview")
+    if view is None:
+        return
+    for panel in list(view.LibraryPanel._panels):
+        panel.stop()
+    for thread in threading.enumerate():
+        if thread.name == view.SCAN_THREAD:
+            thread.join(timeout=10)
 
 
 def make_rom(size=0x40000, game_code=b"BTSE", save_string=b"", extra=b""):

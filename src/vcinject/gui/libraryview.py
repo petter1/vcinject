@@ -32,6 +32,7 @@ from ..errors import InjectError
 from .qtutil import gui_settings, to_qimage
 
 KEY_ROLE = Qt.UserRole
+SCAN_THREAD = "vcinject-library-scan"  # named so tests can wait for it
 
 
 @dataclass
@@ -867,7 +868,7 @@ class LibraryPanel(QFrame):
             if generation == self._generation:
                 self._analysis_done.emit(generation)
 
-        threading.Thread(target=work, daemon=True).start()
+        threading.Thread(target=work, daemon=True, name=SCAN_THREAD).start()
 
     def _update_row(self, generation: int, _index: int, rom: library.LibraryRom):
         index = self._rows.get(rom.path)  # files may have been removed meanwhile

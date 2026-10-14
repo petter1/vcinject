@@ -14,7 +14,7 @@ try:
     from PySide6.QtWidgets import (
         QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame,
         QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
-        QPushButton, QSlider, QToolButton, QVBoxLayout, QWidget,
+        QProgressBar, QPushButton, QSlider, QToolButton, QVBoxLayout, QWidget,
     )
 except ImportError:  # pragma: no cover - reported to the user at startup
     print("The GUI needs PySide6: pip install 'vcinject[gui]'", file=sys.stderr)
@@ -444,6 +444,11 @@ class QrPanel(QFrame):
                        wordWrap=True)
         self.url = QLabel(objectName="muted", textInteractionFlags=Qt.TextSelectableByMouse)
         self.state = QLabel("Waiting for the 3DS…", wordWrap=True)
+        # transfer = install: FBI installs the CIA while it downloads it
+        self.bar = QProgressBar()
+        self.bar.setVisible(False)
+        self.transfer = QLabel(objectName="muted")
+        self.transfer.setVisible(False)
         stop = QPushButton("Stop", objectName="secondary", clicked=self.stop)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 14)
@@ -452,11 +457,15 @@ class QrPanel(QFrame):
         layout.addWidget(self.qr, alignment=Qt.AlignHCenter)
         layout.addWidget(self.url, alignment=Qt.AlignHCenter)
         layout.addWidget(self.state)
+        layout.addWidget(self.bar)
+        layout.addWidget(self.transfer)
         layout.addWidget(stop, alignment=Qt.AlignLeft)
         self.status.connect(self.state.setText)
+        self.progress.connect(self._show_progress)
         self.hide()
 
     shown = Signal(bool)
+    progress = Signal(object, object)  # bytes sent, total (from the server thread)
 
     def setVisible(self, visible: bool):
         # Hide the preview before showing the panel (and show it after hiding the
@@ -470,7 +479,12 @@ class QrPanel(QFrame):
 
     def start(self, path: Path):
         self.stop()
-        self.server = serve.CiaServer([path], log=self.status.emit).start()
+        self.server = serve.CiaServer([path], log=self.status.emit,
+                                      progress=lambda _p, sent, total: self.progress.emit(sent, total)
+                                      ).start()
+        self.bar.setVisible(False)
+        self.transfer.setVisible(False)
+        self._started = None
         image = QImage.fromData(self.server.qr_png(scale=10))
         self.qr.setPixmap(QPixmap.fromImage(image).scaled(QR_SIZE, QR_SIZE, Qt.KeepAspectRatio,
                                                           Qt.SmoothTransformation))
@@ -478,6 +492,27 @@ class QrPanel(QFrame):
         self.url.setText("<br>".join(self.server.urls))
         self.state.setText("Waiting for the 3DS…")
         self.show()
+
+    def _show_progress(self, sent: int, total: int):
+        import time
+        now = time.monotonic()
+        if sent == 0 or self._started is None:
+            self._started = (now, sent)  # (re)started: the 3DS asked again
+        self.bar.setVisible(True)
+        self.transfer.setVisible(True)
+        self.bar.setRange(0, 1000)
+        self.bar.setValue(int(sent * 1000 / max(1, total)))
+        mib = 1024 * 1024
+        elapsed = now - self._started[0]
+        speed = (sent - self._started[1]) / elapsed if elapsed > 0.5 else 0
+        text = f"{sent / mib:.1f} of {total / mib:.1f} MiB"
+        if speed:
+            text += f" · {speed / mib:.1f} MiB/s"
+            if sent < total:
+                text += f" · {int((total - sent) / speed) + 1} s left"
+        if sent >= total:
+            text = f"✓ {total / mib:.1f} MiB sent – FBI finishes the installation on the 3DS"
+        self.transfer.setText(text)
 
     def zoom(self):
         if self.server is None:
@@ -626,6 +661,9 @@ class MainWindow(QMainWindow):
         actions = QHBoxLayout()
         actions.addWidget(self.build_button, 2)
         actions.addWidget(self.qr_button, 1)
+        self.build_progress = QProgressBar()  # steps of a build, shown while building
+        self.build_progress.setRange(0, 100)
+        self.build_progress.setVisible(False)
 
         self.log_view = QPlainTextEdit(readOnly=True, placeholderText="Build log")
         self.log_view.setMaximumBlockCount(1000)
@@ -651,6 +689,7 @@ class MainWindow(QMainWindow):
         self.preview_card = preview_card
         right.addLayout(out_row)
         right.addLayout(actions)
+        right.addWidget(self.build_progress)
         self.qr_panel = QrPanel()
         right.insertWidget(1, self.qr_panel)  # takes the preview's place while serving
         right.addWidget(self.log_view, 1)
@@ -1239,11 +1278,39 @@ class MainWindow(QMainWindow):
         for button in (self.build_button, self.qr_button, self.template_button):
             button.setEnabled(False)
         self.build_button.setText("Building…" if success_message is None else "Working…")
+        self._building = success_message is None
+        self.build_progress.setVisible(self._building)
+        self.build_progress.setValue(0)
+        self.build_progress.setFormat("Preparing…")
+        # a bound method of this window: Qt then delivers log lines on the GUI thread
         Task(self, func, lambda result, error: self._done(result, error, success_message),
-             self.log_view.appendPlainText)
+             self._task_log)
+
+    def _task_log(self, line: str):
+        self.log_view.appendPlainText(line)
+        if self._building:
+            self._build_step(line)
+
+    # log lines of builder.build() and how far the build is at each
+    BUILD_STEPS = (("No GBA VC template", 5, "Downloading the GBA template…"),
+                   ("Looking up artwork", 15, "Looking up artwork…"),
+                   ("Release:", 30, "Artwork found"),
+                   ("Building banner", 45, "Building the banner…"),
+                   ("Building ExeFS", 65, "Building ExeFS…"),
+                   ("Building CXI", 78, "Building the CXI…"),
+                   ("Building CIA", 90, "Building the CIA…"),
+                   ("Done:", 100, "Built"))
+
+    def _build_step(self, line: str):
+        for start, value, text in self.BUILD_STEPS:
+            if line.startswith(start) and value >= self.build_progress.value():
+                self.build_progress.setValue(value)
+                self.build_progress.setFormat(f"{text}  %p%")
+                return
 
     def _done(self, result, error: str, success_message: str | None):
         self._busy = False
+        self.build_progress.setVisible(False)
         for button in (self.build_button, self.qr_button, self.template_button):
             button.setEnabled(True)
         self.build_button.setText("Build CIA")

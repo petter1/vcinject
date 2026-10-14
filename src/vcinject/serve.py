@@ -8,7 +8,6 @@ from __future__ import annotations
 import errno
 import io
 import re
-import shutil
 import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -43,7 +42,10 @@ class CiaServer:
     """Serves a fixed set of files; anything else gets a 404."""
 
     def __init__(self, files: list[Path], host: str | None = None, port: int = DEFAULT_PORT,
-                 log: Callable[[str], None] = lambda msg: print(msg, flush=True)):
+                 log: Callable[[str], None] = lambda msg: print(msg, flush=True),
+                 progress: Callable[[Path, int, int], None] | None = None):
+        """``progress(path, sent, total)`` is called while a file is downloaded
+        (FBI installs while it downloads, so this is the install progress too)."""
         if not files:
             raise InjectError("Nothing to serve.")
         for path in files:
@@ -52,6 +54,7 @@ class CiaServer:
         self.host = host or lan_ip()
         self._routes = {"/" + _url_name(i, Path(p)): Path(p) for i, p in enumerate(files)}
         self._log = log
+        self._progress = progress or (lambda path, sent, total: None)
         self._httpd = self._bind(port)
         self._thread: threading.Thread | None = None
 
@@ -117,8 +120,13 @@ class CiaServer:
                 server._log(f"{self.client_address[0]} is downloading {path.name} "
                             f"({size / 1024 / 1024:.1f} MiB)")
                 try:
+                    sent = 0
+                    server._progress(path, 0, size)
                     with path.open("rb") as f:
-                        shutil.copyfileobj(f, self.wfile, 1024 * 1024)
+                        while chunk := f.read(256 * 1024):
+                            self.wfile.write(chunk)
+                            sent += len(chunk)
+                            server._progress(path, sent, size)
                 except (BrokenPipeError, ConnectionResetError):
                     server._log(f"{self.client_address[0]} aborted the download of {path.name}")
                     return
