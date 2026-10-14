@@ -313,6 +313,11 @@ def mockup(screen: Image.Image, title: str, year: str | None, publisher: str = "
     """
     from PIL import ImageEnhance
 
+    cbmd = load_template()
+    screen_tex = cgfx.decode_texture(cbmd.common, cgfx.textures(cbmd.common)[SCREEN_TEXTURE])
+    if frame_content_box(screen_tex) is not None:
+        return _block_mockup(compose_screen(screen_tex, screen), title, year, publisher, lang)
+
     img = Image.new("RGBA", (400, 240), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     body = body_color()
@@ -334,3 +339,34 @@ def mockup(screen: Image.Image, title: str, year: str | None, publisher: str = "
 
     img.alpha_composite(plate_preview(title, year, publisher, lang), (72, 172))
     return img
+
+
+def block_parts(screen: Image.Image, title: str, year: str | None, publisher: str = "",
+                lang: str | None = None):
+    """For block-style templates: (front face, plate, side colour) to animate; else None."""
+    cbmd = load_template()
+    screen_tex = cgfx.decode_texture(cbmd.common, cgfx.textures(cbmd.common)[SCREEN_TEXTURE])
+    if frame_content_box(screen_tex) is None:
+        return None
+    face = compose_screen(screen_tex, screen)
+    face = face.crop(face.getchannel("A").getbbox())
+    side = tuple(max(0, c - 45) for c in body_color())
+    return face, plate_preview(title, year, publisher, lang), side
+
+
+def _block_mockup(face: Image.Image, title: str, year: str | None, publisher: str,
+                  lang: str | None) -> Image.Image:
+    """Newer NSUI banners: a rotating block with the framed picture on its front."""
+    img = Image.new("RGBA", (400, 240), (0, 0, 0, 0))
+    face = face.crop(face.getchannel("A").getbbox())
+    face = face.resize((round(face.width * 1.15), round(face.height * 1.15)), Image.LANCZOS)
+    x, y = (400 - face.width) // 2, 30
+    # side of the block: the frame colour, darker, offset to the lower right
+    side = Image.new("RGBA", face.size, tuple(max(0, c - 45) for c in body_color()) + (255,))
+    side.putalpha(face.getchannel("A"))
+    for depth in range(10, 0, -1):
+        img.alpha_composite(side, (x + depth, y + depth // 2))
+    img.alpha_composite(face, (x, y))
+    img.alpha_composite(plate_preview(title, year, publisher, lang), (72, 172))
+    return img
+

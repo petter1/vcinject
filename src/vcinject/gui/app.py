@@ -5,9 +5,10 @@ import sys
 from pathlib import Path
 
 try:
-    from PySide6.QtCore import QLocale, QObject, QRectF, QSize, Qt, QThread, QTimer, Signal
+    from PySide6.QtCore import (QLocale, QObject, QPointF, QRectF, QSize, Qt, QThread, QTimer,
+                                Signal)
     from PySide6.QtGui import (QColor, QFont, QFontDatabase, QImage, QLinearGradient, QPainter,
-                               QPainterPath, QPen, QPixmap)
+                               QPainterPath, QPen, QPixmap, QPolygonF, QTransform)
     from PySide6.QtWidgets import (
         QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
         QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
@@ -192,17 +193,77 @@ class ThreeDsPreview(QWidget):
         self.banner: QImage | None = None
         self.icon: QImage | None = None
         self.top_screen: QImage | None = None
+        self.block: tuple[QImage, QImage, QColor] | None = None  # face, plate, side colour
+        self.angle = 0.0
+        self._spin = QTimer(self, interval=33, timeout=self._tick)
         self.title = ""
         self.setFixedSize(self.TOP.width() + 8, self.TOP.height() + self.BOTTOM.height() + self.GAP + 8)
 
     def update_art(self, icon: Image.Image, banner: Image.Image | None, title: str,
-                   top_screen: Image.Image | None = None):
+                   top_screen: Image.Image | None = None, block=None):
         # Show the icon exactly as it will be encoded (48x48 RGB565).
         self.icon = to_qimage(smdh.fit_square(icon, 48))
         self.banner = to_qimage(art.letterbox(banner).convert("RGBA")) if banner else None
         self.top_screen = to_qimage(top_screen) if top_screen is not None else None
+        self.block = None
+        if block is not None:
+            face, plate, side = block
+            self.block = (to_qimage(face), to_qimage(plate), QColor(*side))
+            self._spin.start()
+        else:
+            self._spin.stop()
         self.title = title
         self.update()
+
+    def _tick(self):
+        self.angle = (self.angle + 2.4) % 360
+        self.update()
+
+    def _draw_block(self, p: QPainter, top: QRectF):
+        """Rotating block like the HOME Menu renders newer NSUI GBA banners."""
+        import math
+
+        face, plate, side = self.block
+        w, h = face.width() * 1.15, face.height() * 1.15
+        thickness, focal = 14.0, 420.0
+        center = QPointF(top.center().x(), top.top() + 30 + h / 2)
+        theta = math.radians(self.angle)
+        cos, sin = math.cos(theta), math.sin(theta)
+
+        def quad(z: float) -> tuple[QPolygonF, float]:
+            points, depth = [], 0.0
+            for x, y in ((-w / 2, -h / 2), (w / 2, -h / 2), (w / 2, h / 2), (-w / 2, h / 2)):
+                xr, zr = x * cos + z * sin, -x * sin + z * cos
+                scale = focal / (focal + zr)
+                points.append(QPointF(center.x() + xr * scale, center.y() + y * scale))
+                depth += zr / 4
+            return QPolygonF(points), depth
+
+        source = QPolygonF([QPointF(0, 0), QPointF(w, 0), QPointF(w, h), QPointF(0, h)])
+        layers = []
+        steps = 12
+        for i in range(steps + 1):
+            z = -thickness / 2 + thickness * i / steps
+            poly, depth = quad(z)
+            kind = "front" if i == 0 else "back" if i == steps else "side"
+            layers.append((depth, kind, poly))
+        for depth, kind, poly in sorted(layers, key=lambda layer: -layer[0]):
+            transform = QTransform()
+            if not QTransform.quadToQuad(source, poly, transform):
+                continue
+            p.save()
+            p.setTransform(transform, True)
+            target = QRectF(0, 0, w, h)
+            path = QPainterPath()
+            path.addRoundedRect(target, 10, 10)
+            if kind == "front" and cos > 0:
+                p.drawImage(target, face)
+            elif kind == "back" and cos < 0:
+                p.drawImage(target, face.mirrored(True, False))
+            else:
+                p.fillPath(path, side.darker(100 + int(25 * abs(sin))))
+            p.restore()
+        p.drawImage(QRectF(top.center().x() - 128, top.top() + 168, 256, 64), plate)
 
     def _screen(self, p: QPainter, rect: QRectF, top: str, bottom: str):
         path = QPainterPath()
@@ -218,7 +279,9 @@ class ThreeDsPreview(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
         top = QRectF(4, 4, self.TOP.width(), self.TOP.height())
         self._screen(p, top, "#f4f4f6", "#d9dbe2")
-        if self.top_screen is not None:
+        if self.block is not None:
+            self._draw_block(p, top)
+        elif self.top_screen is not None:
             p.drawImage(top, self.top_screen)
         elif self.banner is not None:
             target = QRectF(top.center().x() - 128, top.top() + 40, 256, 128)
@@ -603,13 +666,16 @@ class MainWindow(QMainWindow):
             self.banner_screen = imgs.get("title") or imgs.get("snap") or imgs.get("boxart") \
                 or art.default_banner(title)
             self.banner_image = None
+            year, publisher = self.released_edit.text().strip(), self.publisher_edit.text().strip()
+            lang = self.plate_lang.currentData()
+            top = block = None
             try:
-                top = vcbanner.mockup(self.banner_screen, title, self.released_edit.text().strip(),
-                                      self.publisher_edit.text().strip(), self.plate_lang.currentData())
+                block = vcbanner.block_parts(self.banner_screen, title, year, publisher, lang)
+                if block is None:
+                    top = vcbanner.mockup(self.banner_screen, title, year, publisher, lang)
             except InjectError as exc:
                 self.art_status.setText(str(exc))
-                top = None
-            self.preview.update_art(icon, None, title, top)
+            self.preview.update_art(icon, None, title, top, block)
             return
         self.banner_image = self._render(self.banner_picker, artwork.render_banner)
         self.preview.update_art(icon, self.banner_image, title)
