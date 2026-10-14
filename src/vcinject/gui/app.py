@@ -29,6 +29,7 @@ from ..errors import InjectError
 ROM_FILTER = "GBA ROMs (*.gba *.agb *.bin);;All files (*)"
 IMAGE_FILTER = "Images (*.png *.jpg *.jpeg *.bmp *.gif *.webp);;All files (*)"
 CUSTOM = "custom"
+QR_SIZE = 360
 BANNER_STYLES = {GBA_3D: ("VC Console Look", ()), **artwork.BANNER_STYLES}
 INJECT_FILTER = "3DS titles (*.cia *.cxi *.bin);;All files (*)"
 
@@ -391,34 +392,42 @@ class QrPanel(QFrame):
         super().__init__(objectName="card")
         self.server: serve.CiaServer | None = None
         self.qr = QLabel(alignment=Qt.AlignCenter)
-        self.qr.setFixedSize(176, 176)
-        self.title = QLabel(objectName="cardTitle", wordWrap=True)
+        self.qr.setFixedSize(QR_SIZE, QR_SIZE)
+        self.title = QLabel(objectName="cardTitle")
         steps = QLabel("On the 3DS open <b>FBI</b> → <b>Remote Install</b> → <b>Scan QR Code</b>. "
                        "The 3DS must be on the same Wi-Fi.", wordWrap=True)
-        self.url = QLabel(objectName="muted", wordWrap=True,
-                          textInteractionFlags=Qt.TextSelectableByMouse)
+        self.url = QLabel(objectName="muted", textInteractionFlags=Qt.TextSelectableByMouse)
         self.state = QLabel("Waiting for the 3DS…", wordWrap=True)
         stop = QPushButton("Stop", objectName="secondary", clicked=self.stop)
-        text = QVBoxLayout()
-        text.addWidget(self.title)
-        text.addWidget(steps)
-        text.addWidget(self.url)
-        text.addStretch(1)
-        text.addWidget(self.state)
-        text.addWidget(stop, alignment=Qt.AlignLeft)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.addWidget(self.qr)
-        layout.addLayout(text, 1)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 14)
+        layout.addWidget(self.title)
+        layout.addWidget(steps)
+        layout.addWidget(self.qr, alignment=Qt.AlignHCenter)
+        layout.addWidget(self.url, alignment=Qt.AlignHCenter)
+        layout.addWidget(self.state)
+        layout.addWidget(stop, alignment=Qt.AlignLeft)
         self.status.connect(self.state.setText)
         self.hide()
+
+    shown = Signal(bool)
+
+    def setVisible(self, visible: bool):
+        # Hide the preview before showing the panel (and show it after hiding the
+        # panel) so both are never visible at once; otherwise Qt raises the
+        # window's minimum height for good.
+        if visible:
+            self.shown.emit(True)
+        super().setVisible(visible)
+        if not visible:
+            self.shown.emit(False)
 
     def start(self, path: Path):
         self.stop()
         self.server = serve.CiaServer([path], log=self.status.emit).start()
-        image = QImage.fromData(self.server.qr_png(scale=5))
-        self.qr.setPixmap(QPixmap.fromImage(image).scaled(176, 176, Qt.KeepAspectRatio,
-                                                          Qt.FastTransformation))
+        image = QImage.fromData(self.server.qr_png(scale=10))
+        self.qr.setPixmap(QPixmap.fromImage(image).scaled(QR_SIZE, QR_SIZE, Qt.KeepAspectRatio,
+                                                          Qt.SmoothTransformation))
         self.title.setText(f"Install {path.name}")
         self.url.setText("<br>".join(self.server.urls))
         self.state.setText("Waiting for the 3DS…")
@@ -581,11 +590,13 @@ class MainWindow(QMainWindow):
         right = QVBoxLayout()
         right.setSpacing(12)
         right.addWidget(preview_card)
+        self.preview_card = preview_card
         right.addLayout(out_row)
         right.addLayout(actions)
         self.qr_panel = QrPanel()
-        right.addWidget(self.qr_panel)
+        right.insertWidget(1, self.qr_panel)  # takes the preview's place while serving
         right.addWidget(self.log_view, 1)
+        self.qr_panel.shown.connect(lambda visible: self.preview_card.setVisible(not visible))
         columns = QHBoxLayout()
         columns.setSpacing(16)
         columns.addLayout(left, 5)
