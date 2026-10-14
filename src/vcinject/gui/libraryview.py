@@ -58,6 +58,7 @@ class Entry:
     status: str = ""
     serial: str = ""
     crc: str = ""
+    dump: str = ""
 
     @property
     def subtitle(self) -> str:
@@ -203,9 +204,9 @@ class DetailsView(QTreeWidget):
     scrolled = Signal()
     sort_requested = Signal(str)
 
-    COLUMNS = ["Title", "System", "Year", "Series", "Release", "Serial", "CRC32", "Folder", "Size",
-               "Status"]
-    SORTABLE = {0: "name", 1: "system", 2: "year", 7: "folder"}
+    COLUMNS = ["Title", "System", "Year", "Series", "Release", "Serial", "CRC32", "Dump", "Folder",
+               "Size", "Status"]
+    SORTABLE = {0: "name", 1: "system", 2: "year", 8: "folder"}
     ICON = QSize(26, 32)
 
     def __init__(self, panel: "LibraryPanel"):
@@ -287,7 +288,7 @@ class DetailsView(QTreeWidget):
     def _fill(self, item: QTreeWidgetItem, entry: Entry):
         size = f"{entry.size / 1024 / 1024:.1f} MiB" if entry.size else ""
         values = [entry.title, entry.system, entry.year, entry.series, entry.release, entry.serial,
-                  entry.crc, entry.folder, size, entry.status]
+                  entry.crc, entry.dump, entry.folder, size, entry.status]
         grey = self.palette().placeholderText().color()
         for column, value in enumerate(values):
             item.setText(column, value)
@@ -299,7 +300,7 @@ class DetailsView(QTreeWidget):
             item.setFont(0, font)
         item.setToolTip(0, entry.tooltip)
         item.setIcon(0, self.panel.icon(entry, self.ICON))
-        item.setTextAlignment(8, Qt.AlignRight | Qt.AlignVCenter)
+        item.setTextAlignment(9, Qt.AlignRight | Qt.AlignVCenter)
         mono = QFont("Menlo")
         mono.setStyleHint(QFont.Monospace)
         item.setFont(6, mono)
@@ -670,6 +671,21 @@ class LibraryPanel(QFrame):
         self.owned_first.toggled.connect(self._options_changed)
         self.owned_first.setVisible(False)
         self.show_missing.toggled.connect(self.owned_first.setVisible)
+        self.collected_only = QCheckBox("Only series I own")
+        self.collected_only.setToolTip("Hide missing games, except those of a series of which "
+                                       "at least one game is in your folder")
+        self.collected_only.setChecked(self.settings.value("library/collected_only", False, type=bool))
+        self.collected_only.toggled.connect(self._options_changed)
+        self.collected_only.setVisible(False)
+        self.show_missing.toggled.connect(self.collected_only.setVisible)
+        self.show_betas = QCheckBox("Betas && prototypes")
+        self.show_betas.setToolTip("Also list games that were never released (only betas, "
+                                   "prototypes or demos exist)")
+        self.show_betas.setChecked(self.settings.value("library/betas", False, type=bool))
+        self.show_betas.toggled.connect(
+            lambda on: (self.settings.setValue("library/betas", on), self._catalog_timer.start()))
+        self.show_betas.setVisible(False)
+        self.show_missing.toggled.connect(self.show_betas.setVisible)
         self.region = QComboBox()
         for name in self.REGIONS:
             self.region.addItem(name)
@@ -723,8 +739,8 @@ class LibraryPanel(QFrame):
                 row1.addWidget(widget)
             layout.addLayout(row1)
             row2 = QHBoxLayout()
-            for widget in (self.stacks, self.show_missing, self.owned_first, self.region,
-                           self.missing_style):
+            for widget in (self.stacks, self.show_missing, self.owned_first, self.collected_only,
+                           self.show_betas, self.region, self.missing_style):
                 row2.addWidget(widget)
             row2.addStretch(1)
             row2.addWidget(self.check_on_select)
@@ -743,6 +759,10 @@ class LibraryPanel(QFrame):
             row = QHBoxLayout()
             row.addWidget(self.show_missing)
             row.addWidget(self.owned_first)
+            layout.addLayout(row)
+            row = QHBoxLayout()
+            row.addWidget(self.collected_only)
+            row.addWidget(self.show_betas)
             layout.addLayout(row)
             layout.addWidget(self.region)
             layout.addWidget(self.missing_style)
@@ -819,13 +839,20 @@ class LibraryPanel(QFrame):
         def work():
             # first everything the index knows (instant), then the new or changed files
             todo = []
+            indexed = []
             for index, rom in enumerate(roms):
                 if generation != self._generation:
                     return
                 if library.from_index(rom):
                     self._analyzed.emit(generation, index, rom)
+                    indexed.append((index, rom))
                 else:
                     todo.append((index, rom))
+            for index, rom in indexed:  # dump check for entries from before it existed
+                if generation != self._generation:
+                    return
+                if library.ensure_verified(rom):
+                    self._analyzed.emit(generation, index, rom)
             for done, (index, rom) in enumerate(todo, 1):
                 if generation != self._generation:
                     break
@@ -869,6 +896,7 @@ class LibraryPanel(QFrame):
         self.settings.setValue("library/sort", self.sort.currentData())
         self.settings.setValue("library/owned_first", self.owned_first.isChecked())
         self.settings.setValue("library/stacks", self.stacks.isChecked())
+        self.settings.setValue("library/collected_only", self.collected_only.isChecked())
         self._refresh()
 
     def _refresh(self):
@@ -933,6 +961,9 @@ class LibraryPanel(QFrame):
             details.append("compilation")
         if rom.self_dumped:
             details.append("self-dumped")
+        dump = library.verified_label(rom)
+        if rom.verified in ("mismatch",):  # only warnings in the list, the rest in tooltip/details
+            details.append(dump)
         note = self._group_notes.get(index, "")
         if note:
             details.append(note)
@@ -945,15 +976,17 @@ class LibraryPanel(QFrame):
         if note:
             status.append(note)
         series = self._series.get(rom.title, "")
-        tip = [str(rom.path), " · ".join(details)] + ([f"Series: {series}"] if series else [])
+        tip = [str(rom.path), " · ".join(details)] + ([f"Series: {series}"] if series else []) \
+            + ([f"Dump: {dump}"] if dump else [])
         region = rom.release[len(rom.title):].strip() if rom.release else ""
         return Entry(f"rom:{rom.path}", "rom", rom.title, details, "\n".join(tip), rom.path, rom,
                      system=rom.system.key.upper(), year=rom.year or "", series=series,
                      release=region, folder=rom.folder, size=rom.size, status=" · ".join(status),
-                     serial=rom.serial, crc=rom.crc)
+                     serial=rom.serial, crc=rom.crc, dump=dump)
 
     def _missing_entry(self, game: library.CatalogGame) -> Entry:
-        details = [game.system.key.upper()] + ([game.year] if game.year else []) + ["missing"]
+        details = [game.system.key.upper()] + ([game.year] if game.year else []) \
+            + (["never released"] if game.unreleased else []) + ["missing"]
         return Entry(_game_key(game), "missing", game.title, details,
                      "Not in your ROM folder:\n" + "\n".join(game.releases[:6]), game=game,
                      system=game.system.key.upper(), year=game.year or "",
@@ -982,8 +1015,13 @@ class LibraryPanel(QFrame):
                 continue
             entry = self._rom_entry(index, rom)
             rows.append((self._sort_key(entry, True), entry))
+        # "Only series I own": missing games only of series with a game in the folder
+        owned_series = {self._series.get(rom.title) for i, rom in enumerate(self.roms)
+                        if system in (None, rom.system.key)} - {None}
         for game in self._missing:
             if (text and text not in game.title.lower()) or not self._in_series(game.title):
+                continue
+            if self.collected_only.isChecked() and self._series.get(game.title) not in owned_series:
                 continue
             entry = self._missing_entry(game)
             rows.append((self._sort_key(entry, False), entry))
@@ -1469,13 +1507,14 @@ class LibraryPanel(QFrame):
         tags = self.REGIONS[self.region.currentText()]
         roms = list(self.roms)
         prefer = self._prefer
+        betas = self.show_betas.isChecked()
         self.count.setText("Loading the game lists…")
 
         def work():
             games = []
             for key in keys:
                 try:
-                    games += library.catalog(systems.SYSTEMS[key], prefer)
+                    games += library.catalog(systems.SYSTEMS[key], prefer, unreleased=betas)
                 except InjectError:
                     continue  # offline and never downloaded: skip that system
             if tags:

@@ -112,3 +112,28 @@ def test_missing_games_keep_their_own_covers(tmp_path, monkeypatch):
         shade = panel.icon(entry, QtCore.QSize(20, 20)).toImage().pixelColor(10, 10).red()
         assert shade == int(entry.title.split()[1]) * 6, entry.title
     panel.stop()
+
+
+def test_missing_games_only_of_owned_series(tmp_path, monkeypatch):
+    monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path / "data"))
+    from vcinject import library, systems
+    from vcinject.gui import libraryview
+
+    roms = tmp_path / "roms"
+    roms.mkdir()
+    (roms / "Pokemon - Ruby Version.gba").write_bytes(b"\0" * 0x200)
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    panel = libraryview.LibraryPanel(autoload=False)
+    panel.load(roms)
+    gba = systems.SYSTEMS["gba"]
+    panel._catalog = panel._missing = [
+        library.CatalogGame(t, [f"{t} (Europe)"], gba)
+        for t in ("Pokemon - Sapphire Version", "Pokemon Pinball", "Tetris World", "Tetris Worlds 2")]
+    panel.show_missing.setChecked(True)
+    panel._catalog_timer.stop()
+    panel._refresh()
+    titles = lambda: sorted(e.title for e in panel._entries if e.kind == "missing")
+    assert len(titles()) == 4
+    panel.collected_only.setChecked(True)  # Tetris is a series too, but none of it is owned
+    assert titles() == ["Pokemon - Sapphire Version", "Pokemon Pinball"]
+    panel.stop()

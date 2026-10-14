@@ -743,11 +743,24 @@ class MainWindow(QMainWindow):
         serial = getattr(self.rom, "game_code", "") or (
             artwork.serial_of(match.name, self.system.database) if match else "")
         parts = [f"CRC32 {crc}"] + ([f"Serial {serial}"] if serial else [])
+        if getattr(self, "_dump", ""):
+            parts.append(self._dump)
         if match and match.method != "retrogamesnexus":
             parts.append('<a href="libretro">libretro ↗</a>')
         parts.append('<a href="nexus">RetroGamesNexus ↗</a>')
         self.drop.ids.setText(" · ".join(parts))
         self.drop.ids.setVisible(True)
+
+    def _dump_checked(self, check_id: int, rom, error: str):
+        """The dump of the open ROM was compared with No-Intro and FlashGBX."""
+        if check_id != self._dump_id or error or rom is None:
+            return
+        if self.found and self.found.match and self.found.match.method == "retrogamesnexus":
+            rom.method = "retrogamesnexus"
+        label = library.verified_label(rom)
+        colour = {"good": "#2e9d4f", "mismatch": "#c0392b"}.get(rom.verified)
+        self._dump = f'<span style="color:{colour}">{label}</span>' if colour else label
+        self._show_ids()
 
     def _open_game_page(self, site: str):
         match = self.found.match if self.found else None
@@ -817,7 +830,12 @@ class MainWindow(QMainWindow):
         self.title_edit.setText(library.plain_stem(path))
         self._show_versions(path)
         self.found = artwork.Artwork()
+        self._dump = ""
         self._show_ids()
+        self._dump_id = getattr(self, "_dump_id", 0) + 1
+        check_id, data = self._dump_id, rom.data
+        Task(self, lambda _log: library.verify_data(path, system, data),
+             lambda result, error: self._dump_checked(check_id, result, error))
         # values of the previous ROM must not leak into this one
         self.released_edit.clear()
         self.long_title_edit.clear()

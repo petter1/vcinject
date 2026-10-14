@@ -109,6 +109,8 @@ def build_parser() -> argparse.ArgumentParser:
     lib.add_argument("--zip", action="store_true",
                      help="pack every unzipped ROM into its own .zip (the original is deleted "
                           "after the zip was verified)")
+    v = sub.add_parser("verify", help="check ROM dumps against No-Intro and FlashGBX checksums")
+    v.add_argument("paths", type=Path, nargs="+", help="ROM files or folders (zipped ROMs too)")
     t = sub.add_parser("import-tickets",
                        help="mark all title IDs on your 3DS as taken (ticket.db from GodMode9)")
     t.add_argument("paths", type=Path, nargs="+", help="ticket.db, .tik files or folders")
@@ -332,6 +334,27 @@ def cmd_library(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_verify(args: argparse.Namespace) -> int:
+    roms = []
+    for path in args.paths:
+        roms += library.scan(path) if path.is_dir() else [
+            library.LibraryRom(path, systems.for_rom(path), path.stat().st_size)]
+    counts = {"good": 0, "mismatch": 0, "unknown": 0, "": 0}
+    for rom in roms:
+        try:
+            checked = library.verify_data(rom.path, rom.system, systems.read_rom(rom.path))
+        except (OSError, InjectError) as exc:
+            print(f"  ?  {rom.path.name}: {exc}")
+            continue
+        counts[checked.verified] += 1
+        mark = {"good": "✓", "mismatch": "✗", "unknown": "–"}.get(checked.verified, "?")
+        print(f"  {mark}  {rom.path.name}\n     {library.verified_label(checked) or 'not checked (offline?)'}"
+              f" · CRC32 {checked.crc} · SHA-1 {checked.dump_sha1}")
+    print(f"\n{counts['good']} good, {counts['mismatch']} differ from the known dump, "
+          f"{counts['unknown']} not in No-Intro / FlashGBX")
+    return 1 if counts["mismatch"] else 0
+
+
 def cmd_forget(args: argparse.Namespace) -> int:
     if not registry.forget(args.title_id):
         raise InjectError(f"{args.title_id:016X} is not in the register.")
@@ -352,7 +375,7 @@ def cmd_gui(_args: argparse.Namespace) -> int:
 
 
 COMMANDS = {"gba": cmd_gba, "build": cmd_gba, "serve": cmd_serve, "setup": cmd_setup,
-            "list": cmd_list, "library": cmd_library, "forget": cmd_forget, "doctor": cmd_doctor,
+            "list": cmd_list, "library": cmd_library, "verify": cmd_verify, "forget": cmd_forget, "doctor": cmd_doctor,
             "templates": cmd_templates, "import-tickets": cmd_import_tickets, "info": cmd_info,
             "save-types": cmd_save_types, "gui": cmd_gui}
 

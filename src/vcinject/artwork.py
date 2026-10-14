@@ -46,6 +46,7 @@ _THUMB_UNSAFE = re.compile(r'[&*/:`<>?\\|"]')
 _GAME_RE = re.compile(r'game \(\s*name "(?P<name>[^"]+)"(?P<body>.*?)\n\)', re.S)
 _CRC_RE = re.compile(r"\bcrc ([0-9A-Fa-f]{8})\b")
 _SERIAL_RE = re.compile(r'\bserial "([^"]+)"')
+_SHA1_RE = re.compile(r"\bsha1 ([0-9A-Fa-f]{40})\b")
 # Prefer the clean retail release when several share a serial.
 _PENALTIES = ("(Beta", "(Proto", "(Demo", "(Sample", "(Kiosk", "(Virtual Console", "[b]", "(Rev")
 
@@ -157,6 +158,7 @@ class ReleaseDatabase:
         self.serials: dict[str, set[str]] = {}
         self.names: list[str] = []
         self.lines: dict[str, int] = {}  # line of each entry in the DAT (for links)
+        self.by_sha1: dict[str, str] = {}  # SHA-1 of a verified dump -> release
         line, last = 1, 0
         for game in _GAME_RE.finditer(text):
             name, body = game.group("name"), game.group("body")
@@ -167,6 +169,8 @@ class ReleaseDatabase:
             self.crcs[name] = [crc.upper() for crc in _CRC_RE.findall(body)]
             for crc in self.crcs[name]:
                 self.by_crc.setdefault(crc, name)
+            for sha1 in _SHA1_RE.findall(body):
+                self.by_sha1.setdefault(sha1.lower(), name)
             self.serials[name] = {s.upper() for s in _SERIAL_RE.findall(body)}
             for serial in self.serials[name]:
                 self.by_serial.setdefault(serial, []).append(name)

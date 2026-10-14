@@ -89,6 +89,20 @@ def read_rom(path: Path) -> bytes:
         raise InjectError(f"Could not unpack {member.filename} from {path.name} ({exc}).") from exc
 
 
+def read_rom_start(path: Path, length: int) -> bytes:
+    """The first ``length`` bytes of the ROM (cheap, also inside a zip)."""
+    path = Path(path)
+    if not is_zip(path):
+        with open(path, "rb") as f:
+            return f.read(length)
+    member = _zip_member(path)
+    try:
+        with zipfile.ZipFile(path) as zf, zf.open(member) as f:
+            return f.read(length)
+    except (OSError, zipfile.BadZipFile, NotImplementedError) as exc:
+        raise InjectError(f"Could not unpack {member.filename} from {path.name} ({exc}).") from exc
+
+
 def for_rom(path: Path) -> System:
     system = _system_for(rom_name(path))
     if system is None:

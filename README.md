@@ -165,6 +165,14 @@ refreshes the whole library – it only asks the servers whether each picture
 changed (ETag) and downloads just the ones that did. The game lists and the covers of missing games
 are cached the same way. **Rescan** reads the folder again.
 
+**Dump check:** every ROM is checked against the known good dumps – the
+No-Intro checksums (SHA-1, via libretro) and, for Game Boy, Color and Advance,
+the database of [FlashGBX](https://github.com/lesserkuma/FlashGBX), the GBxCart
+RW software (it finds the cartridge by its header and compares CRC32 and
+size). A ROM is *verified*, *differs from the known dump* (bad dump or
+modified) or *unverified* (in no list: hacks, translations, homebrew).
+`vcinject verify <files or folders>` does the same on the command line.
+
 Under the ROM, vcinject shows its **CRC32** and cartridge **serial** – the
 keys No-Intro and libretro identify a dump by (libretro has no running index
 number) – with links to the release's entry in the libretro database and to
@@ -186,7 +194,9 @@ are recognised from the titles (e.g. all Pokémon games); the series menu
 filters by one (*Pokemon (5/7)* = owned/known) or by compilations. With
 **Group series** on, each series is shown as one stack of covers – click it to
 open it in place, click again to close it. With missing games shown, *Owned
-first* keeps your own games on top or mixes them into the order.
+first* keeps your own games on top or mixes them into the order, *Only series
+I own* hides missing games except those of a series you have at least one game
+of, and *Betas & prototypes* also lists games that were never released.
 
 **Zipping:** **Zip** packs every unpacked ROM in the library into its own
 .zip file next to it – one game per zip, named like the ROM
@@ -215,6 +225,7 @@ vcinject build "Mega Man X.sfc" -o mmx.cia  # just build
 vcinject library ~/ROMs                     # list a ROM folder (zipped ROMs included)
 vcinject library ~/ROMs --zip               # zip each game individually (one .zip per ROM)
 vcinject library ~/ROMs --clean-names       # rename to release names, report duplicates
+vcinject verify ~/ROMs                      # check dumps against No-Intro and FlashGBX
 vcinject doctor --fix                       # check and repair the setup
 vcinject setup --banner-donor vc_title.cia  # install a VC Console Look
 vcinject setup --forwarder-donor inject.cia # install an emulator template
@@ -323,6 +334,7 @@ In the installed app, the command line is the app binary with arguments, e.g.
 - [libretro-database](https://github.com/libretro/libretro-database) and
   [libretro thumbnails](https://thumbnails.libretro.com) – game data and artwork
 - [RetroGamesNexus](https://retrogamesnexus.com) – fallback covers, e.g. for ROM hacks
+- [FlashGBX](https://github.com/lesserkuma/FlashGBX) – database of verified Game Boy dumps
 - [Project_CTR](https://github.com/3DSGuy/Project_CTR), [3ds-bannertool](https://github.com/carstene1ns/3ds-bannertool)
 
 ## Legal

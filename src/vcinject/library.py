@@ -17,7 +17,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from . import artwork, registry, systems
+from . import artwork, dumpdb, registry, systems
 from .errors import InjectError
 from .template import data_dir
 
@@ -39,6 +39,11 @@ class LibraryRom:
     family: str = ""                       # serial without region letter (GBA "BPE")
     crc: str = ""                          # CRC32 as No-Intro / libretro identify the dump
     serial: str = ""                       # cartridge serial ("BPED"), if the system has one
+    dump_sha1: str = ""                    # SHA-1 as dump databases list it (no copier header)
+    dump_size: int = 0                     # size of the dump without copier header
+    header_sha1: str = ""                  # SHA-1 of the header (FlashGBX looks carts up by it)
+    verified: str = ""                     # "good", "mismatch", "unknown" or "" (not checked)
+    verified_by: str = ""                  # "No-Intro", "FlashGBX" or both
 
     @property
     def title(self) -> str:
@@ -163,8 +168,10 @@ def _save_thumb(name: str, image: Image.Image) -> None:
     path.with_suffix(".png").unlink(missing_ok=True)
 
 
-_FIELDS = ("sha1", "release", "method", "family", "year", "crc", "serial")
-_TEXT_FIELDS = ("sha1", "method", "family", "crc", "serial")  # "" rather than None
+_FIELDS = ("sha1", "release", "method", "family", "year", "crc", "serial", "dump_sha1",
+           "dump_size", "header_sha1", "verified", "verified_by")
+_TEXT_FIELDS = ("sha1", "method", "family", "crc", "serial", "dump_sha1", "verified",
+                "verified_by")  # "" rather than None
 
 
 def from_index(rom: LibraryRom) -> bool:
@@ -222,10 +229,7 @@ def analyze(rom: LibraryRom, online: bool = True, cover: bool = True,
     if not refresh and from_index(rom):
         return rom
     data = systems.read_rom(rom.path)
-    rom.sha1 = hashlib.sha1(data).hexdigest()
-    rom.crc = f"{zlib.crc32(rom.system.strip_header(data)) & 0xFFFFFFFF:08X}"
-    if rom.system.key == "gba" and re.fullmatch(r"[A-Z0-9]{4}", data[0xAC:0xB0].decode("ascii", "replace")):
-        rom.serial = data[0xAC:0xB0].decode("ascii")
+    hash_rom(rom, data)
     rom.built = _built(rom.sha1)
     known = None if refresh else _by_checksum(rom.sha1)
     if known is not None and "crc" in known and (known.get("release") or not online):
@@ -236,8 +240,99 @@ def analyze(rom: LibraryRom, online: bool = True, cover: bool = True,
         return rom
     if not online:
         return rom
+    verify(rom)
     _identify(rom, cover, refresh)
     return rom
+
+
+def hash_rom(rom: LibraryRom, data: bytes) -> None:
+    """Checksums and serial of the ROM's data."""
+    rom.sha1 = hashlib.sha1(data).hexdigest()
+    dump = rom.system.strip_header(data)
+    rom.crc = f"{zlib.crc32(dump) & 0xFFFFFFFF:08X}"
+    rom.dump_sha1 = rom.sha1 if len(dump) == len(data) else hashlib.sha1(dump).hexdigest()
+    rom.dump_size = len(dump)
+    rom.header_sha1 = dumpdb.header_key(rom.system.key, dump)
+    code = data[0xAC:0xB0].decode("ascii", "replace")
+    if rom.system.key == "gba" and re.fullmatch(r"[A-Z0-9]{4}", code):
+        rom.serial = code
+
+
+def verify_data(path: Path, system: systems.System, data: bytes) -> LibraryRom:
+    """Check ROM data that is not (yet) in the library; see verify()."""
+    rom = LibraryRom(Path(path), system, len(data))
+    hash_rom(rom, data)
+    verify(rom)
+    return rom
+
+
+def ensure_verified(rom: LibraryRom) -> bool:
+    """Verify a ROM that came from the index before dumps were checked.
+    Returns True when the result is new."""
+    if rom.verified:
+        return False
+    try:
+        verify(rom)
+    except (OSError, InjectError, zipfile.BadZipFile):
+        return False
+    if rom.verified:
+        _remember(rom)
+    return bool(rom.verified)
+
+
+def verify(rom: LibraryRom) -> str:
+    """Check the dump against the known good dumps of No-Intro (via libretro) and,
+    for Game Boy systems, FlashGBX. Sets and returns ``rom.verified``:
+    "good" (the SHA-1 is listed), "mismatch" (the CRC32 of a release matches but
+    not the SHA-1: probably a bad dump), "unknown" (in no list: a hack,
+    translation, homebrew, or a trimmed or bad dump) or "" when offline."""
+    if not rom.dump_sha1 or not rom.dump_size:  # entries from before verification existed
+        if rom.system.key in ("nes", "snes") or not rom.sha1:  # copier headers: read it all
+            dump = rom.system.strip_header(systems.read_rom(rom.path))
+            rom.dump_sha1, rom.dump_size = hashlib.sha1(dump).hexdigest(), len(dump)
+            rom.header_sha1 = dumpdb.header_key(rom.system.key, dump)
+        else:
+            rom.dump_sha1 = rom.sha1
+            rom.dump_size = _rom_size(rom.path)
+            rom.header_sha1 = dumpdb.header_key(rom.system.key,
+                                                systems.read_rom_start(rom.path, 0x180))
+    sources, differs = [], False
+    try:
+        db = artwork.ReleaseDatabase.load(system=rom.system.database)
+        if rom.dump_sha1 in db.by_sha1:
+            sources.append("No-Intro")
+        differs = rom.crc in db.by_crc  # a release's CRC32, but not its SHA-1
+    except InjectError:
+        return rom.verified  # offline: keep what was found before
+    try:
+        state, _entry = dumpdb.check(rom.system.key, rom.header_sha1, rom.crc, rom.dump_size)
+        if state == "good":
+            sources.append("FlashGBX")
+        differs = differs or state == "mismatch"  # a known cartridge, other contents
+    except InjectError:
+        pass  # FlashGBX is a second opinion only
+    rom.verified = "good" if sources else "mismatch" if differs else "unknown"
+    rom.verified_by = ", ".join(sources)
+    return rom.verified
+
+
+def _rom_size(path: Path) -> int:
+    if systems.is_zip(path):
+        return systems._zip_member(path).file_size
+    return Path(path).stat().st_size
+
+
+def verified_label(rom: LibraryRom) -> str:
+    """How the dump check reads for people ("" when not checked)."""
+    if rom.verified == "good":
+        return f"✓ verified good dump ({rom.verified_by})"
+    if rom.method == "retrogamesnexus":
+        return "ROM hack"
+    if rom.verified == "mismatch":  # a known cartridge, but other contents
+        return "⚠ differs from the known dump (bad dump or modified)"
+    if rom.verified == "unknown":
+        return "unverified (not in No-Intro / FlashGBX)"
+    return ""
 
 
 def _identify(rom: LibraryRom, cover: bool = True, refresh: bool = False) -> None:
@@ -292,12 +387,14 @@ def refresh(rom: LibraryRom) -> bool:
         if from_index(fresh) and fresh.crc:
             fresh.release = fresh.year = fresh.cover = None
             fresh.method = fresh.family = ""
+            verify(fresh)
             _identify(fresh, refresh=True)
         else:
             analyze(fresh, refresh=True)
     except (InjectError, OSError, ValueError, zipfile.BadZipFile):
         return False
-    for name in ("sha1", "release", "year", "method", "family", "crc", "serial", "cover", "built"):
+    for name in ("sha1", "release", "year", "method", "family", "crc", "serial", "dump_sha1",
+                 "dump_size", "header_sha1", "verified", "verified_by", "cover", "built"):
         setattr(rom, name, getattr(fresh, name))
     save_index()
     return True
@@ -392,6 +489,7 @@ class CatalogGame:
     system: systems.System
     year: str | None = None
     owned: bool = False
+    unreleased: bool = False   # only betas, prototypes or demos exist
 
 
 _PREFERRED_TAGS = {"Germany", "De", "Europe"}
@@ -414,7 +512,8 @@ def preferred_order(name: str, prefer: tuple[str, ...]) -> tuple:
     return rank, artwork._release_rank(name, _PREFERRED_TAGS)
 
 
-def catalog(system: systems.System, prefer: tuple[str, ...] = ()) -> list[CatalogGame]:
+def catalog(system: systems.System, prefer: tuple[str, ...] = (),
+            unreleased: bool = False) -> list[CatalogGame]:
     """Every retail game of ``system`` (downloads the No-Intro list once), one entry
     per game. Regional releases are joined when they share a serial family (e.g.
     "Blaue Edition" and "Blue Version") or their title without tags."""
@@ -444,12 +543,14 @@ def catalog(system: systems.System, prefer: tuple[str, ...] = ()) -> list[Catalo
         groups.setdefault(find(name), []).append(name)
     games = []
     for releases in groups.values():
-        if all(any(t in n for t in _UNRELEASED) for n in releases):
-            continue  # never released: only betas, prototypes, demos ...
+        never_released = all(any(t in n for t in _UNRELEASED) for n in releases)
+        if never_released and not unreleased:
+            continue  # only betas, prototypes, demos ... (shown on request)
         releases.sort(key=lambda n: (any(t in n for t in _UNRELEASED), preferred_order(n, prefer)))
         year = artwork._metadata("releaseyear", [c for n in releases for c in db.crcs.get(n, [])],
                                  system.database)
-        games.append(CatalogGame(releases[0].split(" (", 1)[0], releases, system, year))
+        games.append(CatalogGame(releases[0].split(" (", 1)[0], releases, system, year,
+                                 unreleased=never_released))
     return sorted(games, key=lambda g: g.title.lower())
 
 

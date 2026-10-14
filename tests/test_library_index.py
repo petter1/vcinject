@@ -75,6 +75,8 @@ def test_refresh_downloads_again_and_keeps_old_data_offline(tmp_path, monkeypatc
 
     class Db:
         serials = {}
+        by_sha1 = {}
+        by_crc = {}
 
         def identify_crc(self, *args):
             return artwork.Match("Game (Europe) (Rev 1)", "crc")
@@ -89,11 +91,13 @@ def test_refresh_downloads_again_and_keeps_old_data_offline(tmp_path, monkeypatc
     monkeypatch.setattr(artwork.ReleaseDatabase, "load", classmethod(lambda cls, **kw: Db()))
     monkeypatch.setattr(artwork, "_metadata", lambda *a: "2004")
     monkeypatch.setattr(artwork, "fetch_image",
-                        lambda name, kind, system, refresh=False: asked.append(refresh)
+                        lambda name, kind, system, refresh=False: asked.append((name, refresh))
                         or Image.new("RGB", (30, 40), "blue"))
     assert library.refresh(rom)
     assert (rom.release, rom.year, rom.cover.size) == ("Game (Europe) (Rev 1)", "2004", (30, 40))
-    assert asked == [True]  # the image was downloaded again, not taken from the cache
+    # the image was checked again, not taken from the cache (other tests' library
+    # threads may still be calling fetch_image, so only this game's calls count)
+    assert [r for n, r in asked if n == "Game (Europe) (Rev 1)"] == [True]
     library._index = None
     again = library.LibraryRom(rom.path, rom.system, 8)
     assert library.from_index(again) and again.release == "Game (Europe) (Rev 1)"
