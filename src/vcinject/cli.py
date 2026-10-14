@@ -6,8 +6,8 @@ import sys
 import time
 from pathlib import Path
 
-from . import (__version__, artwork, forwarder, gba, registry, serve, systems, template, tickets,
-               tools, vcbanner)
+from . import (__version__, artwork, forwarder, gba, library, registry, serve, systems, template,
+               tickets, tools, vcbanner)
 from .builder import GbaInjectOptions, build, parse_title_id
 from .errors import InjectError
 
@@ -98,6 +98,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "made with NSUI) as templates for SNES, NES, GB/GBC and Mega Drive")
 
     sub.add_parser("list", help="list all injects built so far with their title IDs")
+    lib = sub.add_parser("library", help="list every ROM in a folder and its sub folders")
+    lib.add_argument("folder", type=Path)
+    lib.add_argument("--offline", action="store_true", help="don't identify ROMs online")
     t = sub.add_parser("import-tickets",
                        help="mark all title IDs on your 3DS as taken (ticket.db from GodMode9)")
     t.add_argument("paths", type=Path, nargs="+", help="ticket.db, .tik files or folders")
@@ -213,6 +216,20 @@ def cmd_import_tickets(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_library(args: argparse.Namespace) -> int:
+    roms = library.scan(args.folder)
+    if not roms:
+        print("No supported ROMs found.")
+        return 0
+    for rom in roms:
+        library.analyze(rom, online=not args.offline, cover=False)
+        built = f"built {rom.built[-1].title_id:016X}" if rom.built else ""
+        print(f"{rom.system.key.upper():5} {rom.title[:44]:44} {rom.year or '':4}  "
+              f"{rom.folder[:24]:24} {built}")
+    print(f"\n{len(roms)} ROMs, {sum(1 for r in roms if r.built)} built")
+    return 0
+
+
 def cmd_forget(args: argparse.Namespace) -> int:
     if not registry.forget(args.title_id):
         raise InjectError(f"{args.title_id:016X} is not in the register.")
@@ -233,7 +250,7 @@ def cmd_gui(_args: argparse.Namespace) -> int:
 
 
 COMMANDS = {"gba": cmd_gba, "build": cmd_gba, "serve": cmd_serve, "setup": cmd_setup,
-            "list": cmd_list, "forget": cmd_forget, "import-tickets": cmd_import_tickets, "info": cmd_info,
+            "list": cmd_list, "library": cmd_library, "forget": cmd_forget, "import-tickets": cmd_import_tickets, "info": cmd_info,
             "save-types": cmd_save_types, "gui": cmd_gui}
 
 

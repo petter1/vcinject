@@ -5,13 +5,14 @@ import sys
 from pathlib import Path
 
 try:
-    from PySide6.QtCore import (QLocale, QObject, QPointF, QRectF, QSize, Qt, QThread, QTimer,
-                                Signal)
+    from PySide6.QtCore import (QLocale, QObject, QPointF, QRectF, QSettings, QSize, Qt, QThread,
+                                QTimer, Signal)
     from PySide6.QtGui import (QColor, QFont, QFontDatabase, QImage, QLinearGradient, QPainter,
                                QPainterPath, QPen, QPixmap, QPolygonF, QTransform)
     from PySide6.QtWidgets import (
         QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame,
-        QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
+        QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
+        QMessageBox, QPlainTextEdit,
         QPushButton, QSlider, QToolButton, QVBoxLayout, QWidget,
     )
 except ImportError:  # pragma: no cover - reported to the user at startup
@@ -22,7 +23,9 @@ from PIL import Image
 
 from .. import (__version__, art, artwork, gba, registry, serve, smdh, template, tickets, tools,
                 vcbanner)
-from .. import builder, forwarder, systems
+import threading
+
+from .. import builder, forwarder, library, systems
 from ..builder import (GBA_3D, GbaInjectOptions, default_product_code,
                        default_title_id, parse_title_id)
 from ..errors import InjectError
@@ -476,6 +479,173 @@ class QrPanel(QFrame):
 
 # --- main window ---------------------------------------------------------------
 
+class LibraryPanel(QFrame):
+    """ROM folder (incl. sub folders) as a clickable list with covers."""
+    rom_chosen = Signal(object)          # Path
+    rom_install = Signal(object)         # Path, double-click: build and show the QR code
+    _analyzed = Signal(int, int, object)  # scan generation, row, LibraryRom
+
+    ICON = QSize(40, 48)
+
+    def __init__(self):
+        super().__init__(objectName="card")
+        self.setFixedWidth(300)
+        self.settings = QSettings("vcinject", "vcinject")
+        self.roms: list[library.LibraryRom] = []
+        self._generation = 0
+        self._rows: dict[Path, int] = {}
+
+        title = QLabel("Library", objectName="cardTitle")
+        choose = QPushButton("Folder…", clicked=self.choose_folder)
+        refresh = QToolButton(text="↻", clicked=self.rescan, toolTip="Scan again")
+        top = QHBoxLayout()
+        top.addWidget(title, 1)
+        top.addWidget(refresh)
+        top.addWidget(choose)
+        self.folder_label = QLabel("No folder chosen", objectName="muted")
+        self.folder_label.setWordWrap(True)
+        self.search = QLineEdit(placeholderText="Search")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self._filter)
+        self.system_filter = QComboBox()
+        self.system_filter.addItem("All systems", None)
+        for key, system in systems.SYSTEMS.items():
+            self.system_filter.addItem(system.name, key)
+        self.system_filter.currentIndexChanged.connect(self._filter)
+        self.list = QListWidget()
+        self.list.setIconSize(self.ICON)
+        self.list.setSpacing(2)
+        self.list.setUniformItemSizes(True)
+        self.list.itemClicked.connect(lambda item: self.rom_chosen.emit(item.data(Qt.UserRole)))
+        self.list.itemDoubleClicked.connect(
+            lambda item: self.rom_install.emit(item.data(Qt.UserRole)))
+        self.list.setToolTip("Click to open, double-click to build and install via QR")
+        self.count = QLabel(objectName="muted")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.addLayout(top)
+        layout.addWidget(self.folder_label)
+        layout.addWidget(self.search)
+        layout.addWidget(self.system_filter)
+        layout.addWidget(self.list, 1)
+        layout.addWidget(self.count)
+        self._analyzed.connect(self._update_row)
+
+        folder = self.settings.value("library/folder", "")
+        if folder and Path(folder).is_dir():
+            self.load(Path(folder))
+
+    # --- scanning ------------------------------------------------------------
+
+    def choose_folder(self):
+        start = self.settings.value("library/folder", "")
+        folder = QFileDialog.getExistingDirectory(self, "ROM folder", start)
+        if folder:
+            self.settings.setValue("library/folder", folder)
+            self.load(Path(folder))
+
+    def rescan(self):
+        folder = self.settings.value("library/folder", "")
+        if folder:
+            self.load(Path(folder))
+
+    def load(self, folder: Path):
+        self._generation += 1
+        generation = self._generation
+        try:
+            self.roms = library.scan(folder)
+        except InjectError as exc:
+            QMessageBox.warning(self, "Library", str(exc))
+            return
+        self.folder_label.setText(str(folder))
+        self.list.clear()
+        self._rows = {}
+        for row, rom in enumerate(self.roms):
+            item = QListWidgetItem()
+            item.setData(Qt.UserRole, rom.path)
+            item.setSizeHint(QSize(0, 54))
+            self.list.addItem(item)
+            self._rows[rom.path] = row
+            self._show(item, rom)
+        self._filter()
+        # Identify ROMs and fetch covers in the background, newest scan wins.
+        roms = list(self.roms)
+
+        def work():
+            for row, rom in enumerate(roms):
+                if generation != self._generation:
+                    return
+                try:
+                    library.analyze(rom)
+                except Exception:  # unreadable file etc.: keep it listed as is
+                    continue
+                self._analyzed.emit(generation, row, rom)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def refresh_rom(self, path: Path):
+        """Re-check one ROM (e.g. after building it) without network access."""
+        row = self._rows.get(Path(path))
+        if row is None:
+            return
+        rom = self.roms[row]
+        library.analyze(rom, online=False)
+        self._show(self.list.item(row), rom)
+
+    # --- display -------------------------------------------------------------
+
+    def _update_row(self, generation: int, row: int, rom: library.LibraryRom):
+        if generation == self._generation and row < self.list.count():
+            self._show(self.list.item(row), rom)
+            self._filter()
+
+    def _show(self, item: QListWidgetItem, rom: library.LibraryRom):
+        details = [rom.system.key.upper()]
+        if rom.folder and rom.folder.lower() not in (rom.system.key, rom.system.name.lower()):
+            details.append(rom.folder)
+        if rom.year:
+            details.append(rom.year)
+        if rom.built:
+            details.append(f"✓ built ({rom.built[-1].title_id:016X})")
+        item.setText(f"{rom.title}\n{' · '.join(details)}")
+        item.setToolTip(str(rom.path))
+        if rom.cover is not None:
+            item.setIcon(QPixmap.fromImage(to_qimage(rom.cover)))
+        else:
+            pix = QPixmap(self.ICON)
+            pix.fill(Qt.transparent)
+            p = QPainter(pix)
+            p.setRenderHint(QPainter.Antialiasing)
+            p.setPen(QPen(self.palette().mid().color(), 1.5, Qt.DashLine))
+            p.drawRoundedRect(QRectF(1, 1, pix.width() - 2, pix.height() - 2), 6, 6)
+            p.setFont(QFont(p.font().family(), 8, QFont.Bold))
+            p.drawText(pix.rect(), Qt.AlignCenter, rom.system.key.upper())
+            p.end()
+            item.setIcon(pix)
+
+    def _filter(self):
+        text = self.search.text().strip().lower()
+        system = self.system_filter.currentData()
+        shown = 0
+        for row, rom in enumerate(self.roms):
+            visible = (system is None or rom.system.key == system) and (
+                not text or text in rom.title.lower() or text in rom.path.name.lower()
+                or text in rom.folder.lower())
+            self.list.item(row).setHidden(not visible)
+            shown += visible
+        built = sum(1 for rom in self.roms if rom.built)
+        self.count.setText(f"{shown} of {len(self.roms)} ROMs · {built} built")
+
+    def select(self, path: Path):
+        row = self._rows.get(Path(path))
+        if row is not None:
+            self.list.setCurrentRow(row)
+
+    def stop(self):
+        self._generation += 1  # ends a running analysis
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -491,6 +661,7 @@ class MainWindow(QMainWindow):
         self.last_output: Path | None = None
         self._busy = False
         self._qr_after_build = False
+        self._qr_when_ready = False
         self._lookup_id = 0
         self._art_timer = QTimer(self, singleShot=True, interval=250, timeout=self.refresh_art)
 
@@ -637,8 +808,12 @@ class MainWindow(QMainWindow):
         right.insertWidget(1, self.qr_panel)  # takes the preview's place while serving
         right.addWidget(self.log_view, 1)
         self.qr_panel.shown.connect(lambda visible: self.preview_card.setVisible(not visible))
+        self.library = LibraryPanel()
+        self.library.rom_chosen.connect(self.load_rom)
+        self.library.rom_install.connect(self.install_from_library)
         columns = QHBoxLayout()
         columns.setSpacing(16)
+        columns.addWidget(self.library)
         columns.addLayout(left, 5)
         columns.addLayout(right, 6)
         root = QVBoxLayout()
@@ -648,7 +823,7 @@ class MainWindow(QMainWindow):
         central = QWidget()
         central.setLayout(root)
         self.setCentralWidget(central)
-        self.resize(1000, 800)
+        self.resize(1320, 800)
 
         self.refresh_status()
         self._apply_artwork()  # preselects the VC Console Look when it is set up
@@ -669,7 +844,17 @@ class MainWindow(QMainWindow):
         if path:
             self.load_rom(Path(path))
 
+    def install_from_library(self, path: Path):
+        """Double-click in the library: open the ROM, then build and show the QR code
+        as soon as its artwork has been looked up."""
+        if self.rom_path != Path(path):
+            self.load_rom(Path(path))
+            self._qr_when_ready = True
+        else:
+            self.install_via_qr()
+
     def load_rom(self, path: Path):
+        self._qr_when_ready = False
         try:
             system, rom = builder.load_rom(path)
         except (OSError, InjectError) as exc:
@@ -679,6 +864,7 @@ class MainWindow(QMainWindow):
             self.qr_panel.stop()
             self.log_view.appendPlainText("Stopped serving: a new ROM was loaded.")
         self.rom, self.rom_path, self.system = rom, path, system
+        self.library.select(path)
         for widget in self._gba_only:
             widget.setVisible(system.key == "gba")
         self.drop.headline.setText(path.name)
@@ -720,6 +906,9 @@ class MainWindow(QMainWindow):
         if error:
             self.drop.release.setText("Artwork lookup failed (offline?)")
             self.art_status.setText(error)
+            if self._qr_when_ready:
+                self._qr_when_ready = False
+                QTimer.singleShot(0, self.install_via_qr)
             return
         self.found = result
         if result.match:
@@ -737,6 +926,9 @@ class MainWindow(QMainWindow):
             self.art_status.setText("No artwork found; using generated images.")
         self.drop.set_cover(result.images.get("boxart") or result.images.get("title"))
         self._apply_artwork()
+        if self._qr_when_ready:
+            self._qr_when_ready = False
+            QTimer.singleShot(0, self.install_via_qr)
 
     def _apply_artwork(self):
         self.icon_picker.set_available(artwork.available(artwork.ICON_STYLES, self.found))
@@ -1008,6 +1200,7 @@ class MainWindow(QMainWindow):
             self.log_view.appendPlainText(success_message)
         elif result is not None:
             self.last_output = result.output_path
+            self.library.refresh_rom(self.rom_path)
             if self._qr_after_build:
                 self.show_qr(result.output_path)
             else:
@@ -1032,6 +1225,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self.qr_panel.stop()
+        self.library.stop()
         super().closeEvent(event)
 
 

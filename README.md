@@ -59,7 +59,14 @@ GUI: double-click `start-gui.command` in Finder, or from a terminal:
 ./start-gui.command          # or: .venv/bin/vcinject gui
 ```
 
-Drop a `.gba` file on the window, adjust the title, icon and banner, then click **Build CIA**.
+Drop a ROM on the window, adjust the title, icon and banner, then click **Build CIA**.
+
+**Library:** click **Folder…** in the left panel and choose the folder with your
+ROMs. Every supported ROM in it and its sub folders is listed with cover, system,
+sub folder, release year and whether you built it already. Search and the
+system filter narrow the list. Click a ROM to open it; double-click to build it
+and show the install QR code right away. The folder is remembered. In a
+terminal: `vcinject library <folder>`.
 
 CLI:
 
