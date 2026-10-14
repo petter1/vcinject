@@ -1068,7 +1068,7 @@ class LibraryPanel(QFrame):
 
     def _toggle_stack(self, key: str, expanded: bool):
         if expanded:
-            self._expanded.add(key)
+            self._expanded = {key}  # one open stack at a time: the others close
         else:
             self._expanded.discard(key)
         self._entries = self._build_entries()

@@ -162,3 +162,23 @@ def test_owned_games_lead_their_stack(tmp_path, monkeypatch):
     assert [c.title for c in stack.children] == ["Pokemon - Sapphire Version",
                                                  "Pokemon - Emerald Version", "Pokemon Pinball"]
     panel.stop()
+
+
+def test_opening_a_stack_closes_the_others(tmp_path, monkeypatch):
+    monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path / "data"))
+    from vcinject.gui import libraryview
+
+    roms = tmp_path / "roms"
+    roms.mkdir()
+    for name in ("Pokemon - Ruby.gba", "Pokemon Pinball.gba", "Sonic Advance.gba",
+                 "Sonic Advance 2.gba"):
+        (roms / name).write_bytes(b"\0" * 0x200)
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    panel = libraryview.LibraryPanel(autoload=False)
+    panel.stacks.setChecked(True)
+    panel.load(roms)
+    panel._toggle_stack("stack:Pokemon", True)
+    panel._toggle_stack("stack:Sonic Advance", True)
+    assert panel._expanded == {"stack:Sonic Advance"}
+    assert [e.expanded for e in panel._entries if e.kind == "stack"] == [False, True]
+    panel.stop()
