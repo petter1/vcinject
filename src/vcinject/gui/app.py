@@ -469,6 +469,11 @@ class MainWindow(QMainWindow):
         art_layout.addWidget(self.icon_picker)
         art_layout.addWidget(self.banner_picker)
         art_layout.addWidget(self.frame_check)
+        self.vc_look_button = QPushButton("Set up VC Console Look (default look)…",
+                                          objectName="secondary",
+                                          clicked=lambda: self.install_banner_template()
+                                          and self._apply_artwork())
+        art_layout.addWidget(self.vc_look_button)
         art_layout.addWidget(self.art_status)
 
         # Advanced card (collapsible)
@@ -577,7 +582,7 @@ class MainWindow(QMainWindow):
         self.resize(1000, 800)
 
         self.refresh_status()
-        self.refresh_art()
+        self._apply_artwork()  # preselects the VC Console Look when it is set up
 
     # --- ROM ---------------------------------------------------------------
 
@@ -707,6 +712,7 @@ class MainWindow(QMainWindow):
     # --- template / tools --------------------------------------------------
 
     def refresh_status(self):
+        self.vc_look_button.setVisible(not vcbanner.is_installed())
         missing = [name for name in tools.TOOLS if tools.find_tool(name) is None]
         parts = [f"vcinject {__version__}",
                  "template " + ("installed" if template.is_installed() else "will be downloaded"),
