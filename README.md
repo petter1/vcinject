@@ -1,11 +1,11 @@
 # vcinject
 
-**Virtual Console injects for the Nintendo 3DS – on macOS and Linux.**
+**Virtual Console injects for the Nintendo 3DS – on macOS, Windows and Linux.**
 
 vcinject turns your own game backups into installable 3DS titles that look and
 behave like Nintendo's Virtual Console releases: their own HOME Menu icon, the
 rotating 3D banner with the "Virtual Console" plate, the console's jingle and
-working saves. It is an open alternative to the Windows-only
+working saves. It is an open, cross-platform alternative to the Windows-only
 [New Super Ultimate Injector (NSUI)](https://gbatemp.net/threads/discussion-new-super-ultimate-injector-nsui.500376/),
 with a GUI and a command line built on the same Python core.
 
@@ -23,7 +23,8 @@ with a GUI and a command line built on the same Python core.
 - **One click from ROM to console:** build the CIA and install it over Wi-Fi by
   scanning a QR code with FBI – no SD card shuffling.
 - **ROM library:** point it at your ROM folder (sub folders included) and pick
-  games from a list with covers; optionally list every game of a system from
+  games from a list with covers; zipped ROMs work like unpacked ones, and one
+  click zips the whole folder; optionally list every game of a system from
   the No-Intro database to see what your collection is missing.
 - **VC Console Look:** the official 3D banner per console – rotating cartridge
   or handheld with your game on it, the plate with title and release year in all
@@ -44,12 +45,42 @@ with a GUI and a command line built on the same Python core.
 - A 3DS with custom firmware ([Luma3DS](https://3ds.hacks.guide)) and
   [FBI](https://github.com/TheRealZora/FBI-Reloaded) to install CIAs.
   Luma's signature patches (on by default) are required, as for every inject.
-- macOS or Linux with Python 3.9+, git, make and a C/C++ compiler
-  (macOS: `xcode-select --install`; Debian/Ubuntu: `sudo apt install build-essential git python3-venv`).
+- macOS 12+, Windows 10/11 (64-bit) or Linux.
 - Your own game dumps. vcinject contains **no** games, emulators, Nintendo
   banners or keys.
 
 ## Installation
+
+### Download (recommended)
+
+Get the installer for your system from the
+[latest release](https://github.com/petter1/vcinject/releases/latest). It
+contains everything, including makerom and bannertool; nothing else to install.
+
+| System | File | How |
+| --- | --- | --- |
+| macOS, Apple silicon (M1 and newer) | `vcinject-…-macos-arm64.dmg` | open it, drag **vcinject** to **Applications** |
+| macOS, Intel | `vcinject-…-macos-x86_64.dmg` | same |
+| Windows 10/11 | `vcinject-…-windows-setup.exe` | run it and click through the setup |
+| Ubuntu 22.04+, Debian 12+, Linux Mint … | `vcinject_…_amd64.deb` | `sudo apt install ./vcinject_…_amd64.deb` (pulls in the dependencies), or double-click it |
+
+The app is not signed with a paid Apple / Microsoft certificate, so the system
+warns the first time:
+
+- **macOS:** "vcinject cannot be opened" → open **System Settings → Privacy &
+  Security**, scroll down and click **Open Anyway** (once). Or in the
+  Terminal: `xattr -dr com.apple.quarantine /Applications/vcinject.app`.
+- **Windows:** "Windows protected your PC" → **More info → Run anyway**.
+
+Then start vcinject from Launchpad / the Start menu / your app menu. On the
+first start the **setup assistant** opens and walks you through the rest.
+On Linux the command line is available as `vcinject` as well.
+
+### From source (macOS, Linux)
+
+Needs Python 3.9+, git, make and a C/C++ compiler (macOS:
+`xcode-select --install`; Debian/Ubuntu:
+`sudo apt install build-essential git python3-venv`).
 
 ```sh
 git clone https://github.com/petter1/vcinject.git
@@ -59,8 +90,8 @@ cd vcinject
 
 `./scripts/install.sh --cli` skips the Qt GUI. The script only touches the
 project folder (`bin/`, `build/`, `.venv/`); user data lives in
-`~/Library/Application Support/vcinject` (macOS) or `~/.local/share/vcinject`
-(Linux).
+`~/Library/Application Support/vcinject` (macOS), `%APPDATA%\vcinject`
+(Windows) or `~/.local/share/vcinject` (Linux), for the installed app as well.
 
 Start the GUI with `./start-gui.command` (on macOS also by double-clicking it in
 Finder) or `.venv/bin/vcinject gui`. On the first start the **setup assistant**
@@ -125,7 +156,8 @@ window as usual.
 ```sh
 vcinject build "Golden Sun.gba" --qr        # any supported ROM; build and install via QR
 vcinject build "Mega Man X.sfc" -o mmx.cia  # just build
-vcinject library ~/ROMs                     # list a ROM folder
+vcinject library ~/ROMs                     # list a ROM folder (.zip ROMs included)
+vcinject library ~/ROMs --zip               # pack every ROM into its own .zip
 vcinject doctor --fix                       # check and repair the setup
 vcinject setup --banner-donor vc_title.cia  # install a VC Console Look
 vcinject setup --forwarder-donor inject.cia # install an emulator template
@@ -214,6 +246,16 @@ builds flat banners.
 | `cli.py`, `gui/app.py` | front ends |
 
 A hardware test plan is in [docs/TESTPLAN.md](docs/TESTPLAN.md).
+
+**Installers:** `python packaging/build_app.py` builds the one for the current
+system into `dist/` (needs `pip install pyinstaller`, plus Inno Setup on
+Windows). Pushing a tag `v1.2.3` builds all of them on GitHub Actions and
+publishes a release; *Actions → Installers → Run workflow* builds them without
+releasing.
+
+In the installed app, the command line is the app binary with arguments, e.g.
+`/Applications/vcinject.app/Contents/MacOS/vcinject doctor` (macOS) or
+`vcinject doctor` (Linux).
 
 ## Credits
 

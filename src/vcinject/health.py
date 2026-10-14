@@ -68,13 +68,16 @@ def _check_load(resource: str, label: str, required: bool, load, auto: bool = Fa
 
 def _runs(path: Path) -> bool:
     try:
-        subprocess.run([str(path)], capture_output=True, timeout=10)
+        subprocess.run([str(path)], capture_output=True, timeout=10, stdin=subprocess.DEVNULL,
+                       **tools.NO_WINDOW)
         return True
     except (OSError, subprocess.TimeoutExpired):
         return False
 
 
 def can_build_tools() -> bool:
+    if tools.frozen():
+        return False  # the packaged app ships the tools; nothing to build
     return BUILD_SCRIPT.is_file() and all(shutil.which(t) for t in ("git", "make", "cc", "c++"))
 
 

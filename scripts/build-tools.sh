@@ -18,8 +18,18 @@ PROJECT_CTR_REV="d52c2b0e788c2d085763d7c5dcc4b2edd9ffb7d8"
 BANNERTOOL_REPO="https://github.com/carstene1ns/3ds-bannertool.git"
 BANNERTOOL_REV="734d33be79fd3f8c29c6296158f06ac7c5ca9dcb"
 
-CC="${CC:-cc}"
-CXX="${CXX:-c++}"
+# Windows (MSYS2 / MinGW): .exe files, linked statically so no MinGW DLLs are
+# needed (makerom's makefile links statically on Windows by itself).
+EXE=""
+STATIC=""
+DEFAULT_CC=cc
+DEFAULT_CXX=c++
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) EXE=".exe"; STATIC="-static -static-libgcc -static-libstdc++"
+                          DEFAULT_CC=gcc; DEFAULT_CXX=g++ ;;
+esac
+CC="${CC:-$DEFAULT_CC}"
+CXX="${CXX:-$DEFAULT_CXX}"
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 
@@ -38,7 +48,7 @@ build_makerom() {
     checkout "$PROJECT_CTR_REPO" "$PROJECT_CTR_REV" "$src"
     make -C "$src/makerom" deps -j"$JOBS" CC="$CC" CXX="$CXX" >/dev/null
     make -C "$src/makerom" -j"$JOBS" CC="$CC" CXX="$CXX" >/dev/null
-    install -m 755 "$src/makerom/bin/makerom" "$BIN_DIR/makerom"
+    install -m 755 "$src/makerom/bin/makerom$EXE" "$BIN_DIR/makerom$EXE"
 }
 
 build_bannertool() {
@@ -58,7 +68,7 @@ build_bannertool() {
         -DSTB_VORBIS_NO_PUSHDATA_API -DSTB_VORBIS_NO_STDIO \
         -DDR_WAV_NO_STDIO \
         "$src"/source/*.cpp "$src"/source/3ds/*.cpp "$src"/source/pc/*.cpp \
-        -o "$BIN_DIR/bannertool"
+        $STATIC -o "$BIN_DIR/bannertool$EXE"
 }
 
 main() {

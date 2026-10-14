@@ -1,0 +1,108 @@
+name: Installers
+
+# Builds the installers (macOS .dmg, Windows setup .exe, Linux .deb).
+# A pushed tag v1.2.3 publishes them as a GitHub release; a manual run
+# (Actions -> Installers -> Run workflow) only keeps them as downloadable artifacts.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest       # Apple silicon
+          - os: macos-15-intel     # Intel Macs
+          - os: windows-latest
+          - os: ubuntu-22.04       # oldest supported glibc: runs on Ubuntu 22.04+ / Debian 12+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF_NAME#v}"
+          else v="$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)-dev.${GITHUB_RUN_NUMBER}"; fi
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+
+      # --- 3DS tools (makerom, bannertool) -----------------------------------
+      - name: Build tools (macOS / Linux)
+        if: runner.os != 'Windows'
+        run: bash scripts/build-tools.sh
+
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          msystem: MINGW64
+          update: false
+          install: git make mingw-w64-x86_64-gcc
+      - name: Build tools (Windows, MSYS2)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: bash scripts/build-tools.sh
+
+      # --- app + installer ---------------------------------------------------
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install vcinject and PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[gui]" pyinstaller
+      - name: Install Inno Setup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: if (-not (Get-Command iscc -ErrorAction SilentlyContinue) -and -not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+      - name: Build installer
+        run: python packaging/build_app.py --version ${{ env.VERSION }}
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            macOS)   app=dist/vcinject.app/Contents/MacOS/vcinject ;;
+            Windows) app=dist/vcinject/vcinject.exe ;;
+            Linux)   app=dist/vcinject/vcinject ;;
+          esac
+          "$app" --version
+          "$app" doctor > doctor.txt 2>&1 || true   # templates are missing on CI
+          cat doctor.txt
+          grep -q "✓ makerom" doctor.txt && grep -q "✓ bannertool" doctor.txt
+      - name: Check the .deb installs with its dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ./dist/*.deb
+          vcinject --version
+          code=0; QT_QPA_PLATFORM=offscreen timeout 10 vcinject || code=$?
+          test "$code" -eq 124   # still running after 10 s: the GUI started
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vcinject-${{ matrix.os }}
+          path: |
+            dist/*.dmg
+            dist/*-setup.exe
+            dist/*.deb
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

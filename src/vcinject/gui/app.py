@@ -1620,8 +1620,9 @@ def main() -> int:
     code = app.exec()
     # Library analysis threads may still be downloading covers; they only read, so end
     # right away instead of letting Python finalize under them (avoids shutdown errors).
-    sys.stdout.flush()
-    sys.stderr.flush()
+    for stream in (sys.stdout, sys.stderr):  # None in the windowed Windows app
+        if stream is not None:
+            stream.flush()
     os._exit(code)
 
 

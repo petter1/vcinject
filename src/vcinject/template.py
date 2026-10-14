@@ -33,6 +33,8 @@ def data_dir() -> Path:
         return Path(override)
     if platform.system() == "Darwin":
         return Path.home() / "Library" / "Application Support" / "vcinject"
+    if platform.system() == "Windows":
+        return Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "vcinject"
     return Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "vcinject"
 
 

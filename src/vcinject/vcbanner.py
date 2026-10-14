@@ -48,6 +48,7 @@ _BOLD_FONTS = (
     "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
     "/usr/share/fonts/liberation-sans/LiberationSans-Bold.ttf",
+    "C:/Windows/Fonts/arialbd.ttf",
 )
 
 
