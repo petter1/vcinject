@@ -75,6 +75,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="LCD ghosting blend, 1-255; lower = more ghosting (default: 0x80)")
     g.add_argument("--brightness", type=float, default=gba.DEFAULT_BRIGHTNESS,
                    help="color LUT scale 0.1-1.0 (default: 1.0; official titles use 0.7)")
+    g.add_argument("--gb-emulator", choices=["auto", "nintendo", "retroarch"], default="auto",
+                   help="Game Boy / Color: Nintendo's VC emulator (default when set up) or RetroArch")
     g.add_argument("--keep-cxi", action="store_true", help="also write the intermediate .cxi")
     g.add_argument("--qr", action="store_true",
                    help="after building, serve the CIA and show a QR code for FBI")
@@ -139,7 +141,8 @@ def cmd_gba(args: argparse.Namespace) -> int:
         brightness=args.brightness, icon_path=args.icon, banner_path=args.banner,
         online_artwork=not args.offline, icon_style=args.icon_style,
         banner_style=args.banner_style, icon_frame=not args.no_icon_frame,
-        release_year=args.released, plate_language=args.plate_lang, keep_cxi=args.keep_cxi)
+        release_year=args.released, plate_language=args.plate_lang, keep_cxi=args.keep_cxi,
+        gb_emulator=args.gb_emulator)
     if systems.for_rom(args.rom).key == "gba" and not template.is_installed():
         print("No GBA VC template installed yet, downloading it once...")
         template.download()
