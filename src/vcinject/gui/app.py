@@ -516,7 +516,11 @@ class LibraryPanel(QFrame):
         self.list.setIconSize(self.ICON)
         self.list.setSpacing(2)
         self.list.setUniformItemSizes(True)
-        self.list.itemClicked.connect(lambda item: self.rom_chosen.emit(item.data(Qt.UserRole)))
+        # Any change of the current item (mouse or arrow keys) opens the ROM; a short
+        # delay keeps fast scrolling through the list smooth.
+        self._open_timer = QTimer(self, singleShot=True, interval=150, timeout=self._open_current)
+        self.list.currentItemChanged.connect(lambda current, _previous: current and self._open_timer.start())
+        self.list.itemClicked.connect(lambda item: self._open_current())
         self.list.itemDoubleClicked.connect(
             lambda item: self.rom_install.emit(item.data(Qt.UserRole)))
         self.list.setToolTip("Click to open, double-click to build and install via QR")
@@ -637,10 +641,19 @@ class LibraryPanel(QFrame):
         built = sum(1 for rom in self.roms if rom.built)
         self.count.setText(f"{shown} of {len(self.roms)} ROMs · {built} built")
 
+    def _open_current(self):
+        self._open_timer.stop()
+        item = self.list.currentItem()
+        if item is not None:
+            self.rom_chosen.emit(item.data(Qt.UserRole))
+
     def select(self, path: Path):
+        """Highlight a ROM opened elsewhere (e.g. dropped) without reopening it."""
         row = self._rows.get(Path(path))
-        if row is not None:
+        if row is not None and row != self.list.currentRow():
+            self.list.blockSignals(True)
             self.list.setCurrentRow(row)
+            self.list.blockSignals(False)
 
     def stop(self):
         self._generation += 1  # ends a running analysis
@@ -854,6 +867,8 @@ class MainWindow(QMainWindow):
             self.install_via_qr()
 
     def load_rom(self, path: Path):
+        if self.rom_path is not None and Path(path) == self.rom_path and not self._busy:
+            return  # already open: keep the user's edits
         self._qr_when_ready = False
         try:
             system, rom = builder.load_rom(path)
