@@ -10,7 +10,7 @@ try:
     from PySide6.QtGui import (QColor, QFont, QFontDatabase, QImage, QLinearGradient, QPainter,
                                QPainterPath, QPen, QPixmap, QPolygonF, QTransform)
     from PySide6.QtWidgets import (
-        QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QFrame,
+        QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame,
         QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
         QPushButton, QSlider, QToolButton, QVBoxLayout, QWidget,
     )
@@ -386,6 +386,29 @@ class ArtPicker(QWidget):
         self.changed.emit()
 
 
+class QrZoomDialog(QDialog):
+    """The install QR code on its own, as large as the screen allows."""
+
+    def __init__(self, png: bytes, title: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setStyleSheet("background: white;")
+        screen = (parent.screen() if parent else QApplication.primaryScreen()).availableGeometry()
+        side = int(min(screen.width(), screen.height()) * 0.8)
+        label = QLabel(alignment=Qt.AlignCenter)
+        # FastTransformation keeps the modules crisp, which scanners like best.
+        label.setPixmap(QPixmap.fromImage(QImage.fromData(png)).scaled(
+            side, side, Qt.KeepAspectRatio, Qt.FastTransformation))
+        hint = QLabel("Click or press Esc to close", alignment=Qt.AlignCenter)
+        hint.setStyleSheet("color: #666;")
+        layout = QVBoxLayout(self)
+        layout.addWidget(label)
+        layout.addWidget(hint)
+
+    def mousePressEvent(self, event):
+        self.accept()
+
+
 class QrPanel(QFrame):
     """Inline QR code for FBI's remote install; serves the CIA while visible."""
     status = Signal(str)  # emitted from server threads, delivered on the GUI thread
@@ -395,9 +418,13 @@ class QrPanel(QFrame):
         self.server: serve.CiaServer | None = None
         self.qr = QLabel(alignment=Qt.AlignCenter)
         self.qr.setFixedSize(QR_SIZE, QR_SIZE)
+        self.qr.setCursor(Qt.PointingHandCursor)
+        self.qr.setToolTip("Click to enlarge")
+        self.qr.mousePressEvent = lambda _event: self.zoom()
         self.title = QLabel(objectName="cardTitle")
         steps = QLabel("On the 3DS open <b>FBI</b> → <b>Remote Install</b> → <b>Scan QR Code</b>. "
-                       "The 3DS must be on the same Wi-Fi.", wordWrap=True)
+                       "The 3DS must be on the same Wi-Fi. Click the code to enlarge it.",
+                       wordWrap=True)
         self.url = QLabel(objectName="muted", textInteractionFlags=Qt.TextSelectableByMouse)
         self.state = QLabel("Waiting for the 3DS…", wordWrap=True)
         stop = QPushButton("Stop", objectName="secondary", clicked=self.stop)
@@ -434,6 +461,11 @@ class QrPanel(QFrame):
         self.url.setText("<br>".join(self.server.urls))
         self.state.setText("Waiting for the 3DS…")
         self.show()
+
+    def zoom(self):
+        if self.server is None:
+            return
+        QrZoomDialog(self.server.qr_png(scale=20), self.title.text(), self.window()).exec()
 
     def stop(self):
         if self.server is not None:
