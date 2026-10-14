@@ -395,6 +395,7 @@ class CatalogGame:
 
 
 _PREFERRED_TAGS = {"Germany", "De", "Europe"}
+_UNRELEASED = ("(Beta", "(Proto", "(Demo", "(Sample", "(Kiosk", "(Debug", "[b]")
 # Not part of a collection: unlicensed, pirate and aftermarket releases, tools, BIOS ...
 _NOT_GAMES = ("(Unl", "(Pirate", "(Aftermarket", "(Program", "(Tech Demo", "(Hack", "[BIOS]",
               "(Test Program", "(Enhancement Chip")
@@ -418,8 +419,9 @@ def catalog(system: systems.System, prefer: tuple[str, ...] = ()) -> list[Catalo
     per game. Regional releases are joined when they share a serial family (e.g.
     "Blaue Edition" and "Blue Version") or their title without tags."""
     db = artwork.ReleaseDatabase.load(system=system.database)
-    names = [n for n in db.names
-             if not artwork._release_rank(n)[0] and not any(t in n for t in _NOT_GAMES)]
+    # revisions ("Rev 1"), betas and re-releases belong to their game, so a dump of
+    # any of them counts as owned; they are only never the name shown for a game
+    names = [n for n in db.names if not any(t in n for t in _NOT_GAMES)]
     parent = {n: n for n in names}
 
     def find(n):
@@ -442,7 +444,9 @@ def catalog(system: systems.System, prefer: tuple[str, ...] = ()) -> list[Catalo
         groups.setdefault(find(name), []).append(name)
     games = []
     for releases in groups.values():
-        releases.sort(key=lambda n: preferred_order(n, prefer))
+        if all(any(t in n for t in _UNRELEASED) for n in releases):
+            continue  # never released: only betas, prototypes, demos ...
+        releases.sort(key=lambda n: (any(t in n for t in _UNRELEASED), preferred_order(n, prefer)))
         year = artwork._metadata("releaseyear", [c for n in releases for c in db.crcs.get(n, [])],
                                  system.database)
         games.append(CatalogGame(releases[0].split(" (", 1)[0], releases, system, year))

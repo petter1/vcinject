@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from vcinject import library, registry
 
 
@@ -63,3 +65,27 @@ game (
                              release="Pokemon - Emerald Version (USA, Europe)")
     assert library.mark_owned(games, [rom]) == 1
     assert games[1].owned and not games[0].owned
+
+
+def test_revisions_count_as_owning_the_game(monkeypatch):
+    from vcinject import artwork, systems
+
+    dat = "\n".join(f'game (\n\tname "{name}"\n\tserial "{serial}"\n\trom ( crc {crc} )\n)'
+                    for name, serial, crc in (
+                        ("Pokemon - Rubin-Edition (Germany)", "AXVD", "00000001"),
+                        ("Pokemon - Rubin-Edition (Germany) (Rev 1)", "AXVD", "00000002"),
+                        ("Pokemon - Rubin-Edition (Germany) (Beta)", "AXVD", "00000005"),
+                        ("Pokemon - Ruby Version (USA, Europe)", "AXVE", "00000003"),
+                        ("Unreleased Game (Europe) (Proto)", "BUGE", "00000004")))
+    monkeypatch.setattr(artwork.ReleaseDatabase, "load",
+                        classmethod(lambda cls, **kw: artwork.ReleaseDatabase(dat)))
+    monkeypatch.setattr(artwork, "_metadata", lambda *a: None)
+    gba = systems.SYSTEMS["gba"]
+    games = library.catalog(gba, ("Germany", "Europe"))
+    assert [g.title for g in games] == ["Pokemon - Rubin-Edition"]  # the prototype is no game
+    assert games[0].releases[0] == "Pokemon - Rubin-Edition (Germany)"
+    assert games[0].releases[-1].endswith("(Beta)")
+    rev1 = library.LibraryRom(Path("rubin.gba"), gba, 1,
+                              release="Pokemon - Rubin-Edition (Germany) (Rev 1)")
+    library.mark_owned(games, [rev1])
+    assert games[0].owned
