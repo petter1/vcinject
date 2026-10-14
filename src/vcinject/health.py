@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from . import forwarder, systems, template, tools, vcbanner
+from . import forwarder, gbvc, systems, template, tools, vcbanner
 from .errors import InjectError, MissingResource
 
 AskFile = Callable[[str], "Path | None"]
@@ -53,6 +53,9 @@ def check() -> list[Check]:
     for kind, label in systems.FORWARDER_KINDS.items():
         results.append(_check_load(f"forwarder:{kind}", f"Emulator template – {label}", False,
                                    lambda kind=kind: forwarder.ForwarderTemplate.load(kind)))
+    for kind, label in gbvc.KINDS.items():
+        results.append(_check_load(f"gbvc:{kind}", f"Nintendo emulator – {label}", False,
+                                   lambda kind=kind: gbvc.GbVcTemplate.load(kind)))
     return results
 
 
@@ -104,6 +107,9 @@ def question(resource: str) -> str:
     if kind == "forwarder":
         return (f"Choose an existing {systems.FORWARDER_KINDS[name]} emulator inject (.cia), "
                 f"e.g. one made with NSUI")
+    if kind == "gbvc":
+        return ("Choose an official Game Boy / Game Boy Color Virtual Console title you own "
+                "(.cia/.cxi), e.g. Pokémon Blue or Gold, dumped with GodMode9")
     if kind == "gba-template":
         return "Choose a decrypted GBA VC title (.cia/.cxi), or cancel to download the template"
     return f"Set up {resource}"
@@ -136,6 +142,16 @@ def heal(resource: str, ask_file: AskFile | None = None, log: Log = print) -> bo
                 vcbanner.derive_look(name)
             else:
                 return False
+        elif kind == "gbvc":
+            donor = ask_file(question(resource)) if ask_file else None
+            if not donor:
+                return False
+            installed = gbvc.install_from(Path(donor))
+            log(f"Installed Nintendo's {gbvc.KINDS[installed.kind]} emulator.")
+            if installed.kind != name:
+                log("That title runs the other Game Boy emulator build; it was set up for that "
+                    "one (both work for Game Boy games).")
+                return True
         elif kind == "forwarder":
             donor = ask_file(question(resource)) if ask_file else None
             if not donor:

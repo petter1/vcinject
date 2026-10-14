@@ -19,7 +19,7 @@ from .errors import InjectError
 from .template import data_dir
 
 MANIFEST = "vcinject-templates.json"
-_PARTS = ("gba", "vc_looks", "forwarders")  # sub folders of the templates folder
+_PARTS = ("gba", "vc_looks", "forwarders", "gbvc")  # sub folders of the templates folder
 
 
 def templates_root() -> Path:

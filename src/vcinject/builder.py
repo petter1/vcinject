@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import struct
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -15,7 +16,8 @@ from typing import Callable
 
 from PIL import Image
 
-from . import art, artwork, cgfx, forwarder, gba, ncch, registry, smdh, systems, tools, vcbanner
+from . import (art, artwork, cgfx, forwarder, gba, gbvc, ncch, registry, smdh, systems, tools,
+               vcbanner)
 from .errors import InjectError
 from .template import GbaTemplate
 
@@ -103,6 +105,9 @@ class GbaInjectOptions:
     banner_screen: Image.Image | None = None
     release_year: str | None = None
     plate_language: str | None = None  # for banners with one shared plate; None = system
+    # Game Boy / Color: "nintendo" (official VC emulator), "retroarch" (forwarder) or
+    # "auto" (Nintendo's when it is set up)
+    gb_emulator: str = "auto"
     keep_cxi: bool = False
 
 
@@ -119,14 +124,48 @@ InjectOptions = GbaInjectOptions  # the same options serve every system
 
 
 def resolve_title(options: GbaInjectOptions, rom) -> str:
-    return (options.title or options.rom_path.stem or rom.title or "Game").strip()
+    if options.title:
+        return options.title.strip()
+    # from the file name: without "(Europe) (En,Fr)" tags and the selfdumped mark, and
+    # short enough for the HOME Menu (63 characters)
+    from .library import plain_stem
+    name = plain_stem(options.rom_path).split(" (", 1)[0].split(" [", 1)[0].strip()
+    return (name or rom.title or "Game")[:63].strip()
 
 
 def build(options: GbaInjectOptions, log: Log = print) -> BuildResult:
     """Build an inject for any supported ROM type."""
-    if systems.for_rom(options.rom_path).key == "gba":
+    key = systems.for_rom(options.rom_path).key
+    if key == "gba":
         return build_gba(options, log=log)
+    if key in ("gb", "gbc") and gb_emulator(options) == "nintendo":
+        return build_gb_vc(options, log=log)
     return build_forwarder(options, log=log)
+
+
+def gb_emulator(options: GbaInjectOptions) -> str:
+    """Which emulator runs a Game Boy game: Nintendo's VC emulator unless RetroArch
+    is asked for or only RetroArch is set up."""
+    if options.gb_emulator in ("nintendo", "retroarch"):
+        return options.gb_emulator
+    if gbvc.installed_kinds() or "gbc" not in forwarder.installed_kinds():
+        return "nintendo"
+    return "retroarch"
+
+
+def build_gb_vc(options: GbaInjectOptions, log: Log = print) -> BuildResult:
+    """Game Boy / Color with Nintendo's own Virtual Console emulator."""
+    c = _prepare(options, log)
+    template = gbvc.template_for(c.rom.data)
+    if gbvc.is_color(c.rom.data) and template.kind == "gb":
+        c.warnings.append("A Game Boy Color game runs on the Game Boy emulator build here; "
+                          "set up a Color VC title (e.g. Pokémon Gold) for the best result.")
+    exheader, romfs_image = template.build(c.rom.data, c.title_id, c.product_code.rsplit("-", 1)[-1])
+    log(f"Emulator:     Nintendo Virtual Console ({gbvc.KINDS[template.kind]})")
+    log(f"Save data:    {struct.unpack_from('<Q', exheader, 0x1C0)[0] // 1024} KiB")
+    _finish(options, c, code=template.code, exheader=exheader, romfs=romfs_image,
+            logo=template.logo, save_type_name="", log=log)
+    return BuildResult(c.output, c.title_id, c.product_code, None, c.warnings)
 
 
 @dataclass

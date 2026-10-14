@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import (__version__, artwork, backup, forwarder, gba, health, library, registry, serve,
+from . import (__version__, artwork, backup, forwarder, gba, gbvc, health, library, registry, serve,
                systems, template, tickets, tools, vcbanner)
 from .builder import GbaInjectOptions, build, parse_title_id
 from .errors import InjectError, MissingResource
@@ -96,6 +96,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "Game Boy start-up sound) until you have official GB VC templates")
     s.add_argument("--banner-system", choices=sorted(systems.SYSTEMS),
                    help="console for --banner-donor when it can't be detected")
+    s.add_argument("--gbvc-donor", type=Path, nargs="+", metavar="TITLE",
+                   help="use Nintendo's emulator from official Game Boy / Color VC titles you own "
+                        "(e.g. Pokémon Blue and Gold) for Game Boy games")
     s.add_argument("--forwarder-donor", type=Path, nargs="+", metavar="INJECT",
                    help="use existing emulator injects (RetroArch / snes9x / VirtuaNES, e.g. "
                         "made with NSUI) as templates for SNES, NES, GB/GBC and Mega Drive")
@@ -174,6 +177,12 @@ def _serve(files: list[Path], host: str | None, port: int) -> int:
 
 
 def cmd_setup(args: argparse.Namespace) -> int:
+    for donor in args.gbvc_donor or []:
+        t = gbvc.install_from(donor)
+        print(f"Nintendo's {gbvc.KINDS[t.kind]} emulator installed from {donor.name}")
+    if args.gbvc_donor and not (args.donor or args.banner_donor or args.forwarder_donor
+                                or args.derive_looks):
+        return 0
     if args.forwarder_donor:
         for donor in args.forwarder_donor:
             t = forwarder.install_from(donor)
@@ -257,6 +266,10 @@ def cmd_info(_args: argparse.Namespace) -> int:
     looks = vcbanner.installed_systems()
     print(f"{'VC look':12} " + (", ".join(systems.SYSTEMS[k].name for k in looks) if looks
                                 else "none (optional: vcinject setup --banner-donor <title.cia>)"))
+    for kind, label in gbvc.KINDS.items():
+        state = "installed" if kind in gbvc.installed_kinds() else \
+            "not set up (vcinject setup --gbvc-donor <official GB VC title.cia>)"
+        print(f"{kind + '-vc':12} {label}: {state}")
     installed = forwarder.installed_kinds()
     for kind, label in systems.FORWARDER_KINDS.items():
         state = "installed" if kind in installed else "not set up (vcinject setup --forwarder-donor <inject.cia>)"

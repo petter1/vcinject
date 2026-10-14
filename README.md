@@ -14,9 +14,9 @@ with a GUI and a command line built on the same Python core.
 | Game Boy Advance | natively on the 3DS's GBA hardware (AGB_FIRM) | ✅ |
 | Super Nintendo | snes9x_3ds forwarder | ✅ needs an emulator template |
 | Mega Drive / Genesis | RetroArch forwarder | ✅ needs an emulator template |
-| Game Boy / Color | RetroArch forwarder | ✅ needs an emulator template |
+| Game Boy / Color | Nintendo's own VC emulator (from an official GB/GBC VC title) or a RetroArch forwarder | ✅ needs an emulator template |
 | NES | VirtuaNES / RetroArch forwarder | ✅ needs an emulator template |
-| NES, GB/GBC with Nintendo's own VC emulator | | planned |
+| NES with Nintendo's own VC emulator | | planned |
 
 **Planned: Wii and Wii U.** Besides the 3DS, vcinject is meant to also build
 Virtual Console injects for the **Wii** (WAD channels) and the **Wii U**
@@ -116,6 +116,7 @@ part and its state:
 | GBA base template | GBA | downloaded (pinned, SHA-256 checked) or taken from a GBA VC title you own |
 | VC Console Look per console | the 3D banner (optional) | the banner of a VC title or inject you own, e.g. an official VC game dumped with GodMode9 or an NSUI v28+ inject |
 | Emulator template per system | SNES, NES, GB/GBC, Mega Drive | an existing emulator inject you own, e.g. made with NSUI |
+| Nintendo's GB/GBC emulator | Game Boy / Color (instead of RetroArch) | an official GB or GBC VC title you own, e.g. Pokémon Blue / Gold (`vcinject setup --gbvc-donor title.cia`); the GBC one also runs GB games |
 | ROM folder | the library (optional) | your folder |
 
 To dump one of your installed VC titles as a template: boot GodMode9 (hold

@@ -24,7 +24,7 @@ from PIL import Image
 
 from .. import (__version__, art, artwork, gba, registry, serve, smdh, template, tickets, tools,
                 vcbanner)
-from .. import builder, forwarder, health, library, systems
+from .. import builder, forwarder, gbvc, health, library, systems
 from ..builder import (GBA_3D, GbaInjectOptions, default_product_code,
                        default_title_id, parse_title_id)
 from ..errors import InjectError, MissingResource
@@ -651,6 +651,21 @@ class MainWindow(QMainWindow):
         adv.addWidget(self.brightness_label, 5, 2)
         self._gba_only += [ghost_caption, self.ghosting, self.ghosting_label, bright_caption,
                            self.brightness, self.brightness_label]
+        # Game Boy / Color: Nintendo's VC emulator or a RetroArch forwarder
+        self.gb_emulator = QComboBox()
+        for key, label in (("auto", "Automatic (Nintendo VC when set up)"),
+                           ("nintendo", "Nintendo Virtual Console"),
+                           ("retroarch", "RetroArch forwarder")):
+            self.gb_emulator.addItem(label, key)
+        self.gb_emulator.setCurrentIndex(max(0, self.gb_emulator.findData(
+            gui_settings().value("build/gb_emulator", "auto"))))
+        self.gb_emulator.currentIndexChanged.connect(
+            lambda: (gui_settings().setValue("build/gb_emulator", self.gb_emulator.currentData()),
+                     self.rom is not None and self._show_rom_details()))
+        emulator_caption = QLabel("Emulator")
+        adv.addWidget(emulator_caption, 6, 0)
+        adv.addWidget(self.gb_emulator, 6, 1, 1, 2)
+        self._gb_only = [emulator_caption, self.gb_emulator]
 
         # Preview + actions
         preview_card, preview_layout = card("Preview")
@@ -747,6 +762,27 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "Select ROM", "", ROM_FILTER)
         if path:
             self.load_rom(Path(path))
+
+    def _show_rom_details(self):
+        """System, size and how the game will run (save type / emulator)."""
+        rom, system = self.rom, self.system
+        size = f"{len(rom.data) / 1024 / 1024:.1f} MiB"
+        if system.key == "gba":
+            self.drop.details.setText(
+                f"{rom.game_code or '----'} · {size} · {rom.detect_save_type().label}"
+                + ("" if rom.header_valid else " · ⚠ bad header checksum"))
+            return
+        if system.key in ("gb", "gbc"):
+            options = builder.GbaInjectOptions(rom_path=self.rom_path,
+                                               gb_emulator=self.gb_emulator.currentData())
+            if builder.gb_emulator(options) == "nintendo":
+                how = ("Nintendo VC emulator" if gbvc.installed_kinds()
+                       else "⚠ Nintendo VC emulator not set up yet")
+                self.drop.details.setText(f"{system.name} · {size} · {how}")
+                return
+        ready = system.forwarder in forwarder.installed_kinds()
+        self.drop.details.setText(f"{system.name} · {size} · "
+                                  + ("emulator forwarder" if ready else "⚠ no emulator template yet"))
 
     def _show_versions(self, path: Path):
         group, dupes = self.library.versions(path)
@@ -882,20 +918,13 @@ class MainWindow(QMainWindow):
         self.library.select(path)
         for widget in self._gba_only:
             widget.setVisible(system.key == "gba")
+        for widget in self._gb_only:
+            widget.setVisible(system.key in ("gb", "gbc"))
         self.drop.headline.setText(path.name)
         self.drop.headline.setObjectName("cardTitle")
         self.drop.headline.style().unpolish(self.drop.headline)
         self.drop.headline.style().polish(self.drop.headline)
-        size = f"{len(rom.data) / 1024 / 1024:.1f} MiB"
-        if system.key == "gba":
-            self.drop.details.setText(
-                f"{rom.game_code or '----'} · {size} · {rom.detect_save_type().label}"
-                + ("" if rom.header_valid else " · ⚠ bad header checksum"))
-        else:
-            ready = system.forwarder in forwarder.installed_kinds()
-            self.drop.details.setText(f"{system.name} · {size} · "
-                                      + ("emulator forwarder" if ready
-                                         else "⚠ no emulator template yet"))
+        self._show_rom_details()
         self.drop.release.setText("Looking up release…")
         self.drop.set_cover(None, system.key.upper())
         self.title_edit.setText(library.plain_stem(path))
@@ -1263,6 +1292,7 @@ class MainWindow(QMainWindow):
             banner_screen=self.banner_screen,
             release_year=self.released_edit.text().strip(),
             plate_language=self.plate_lang.currentData(),
+            gb_emulator=self.gb_emulator.currentData(),
             online_artwork=False,
         )
 

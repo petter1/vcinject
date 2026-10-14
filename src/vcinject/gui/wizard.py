@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QLabel, QMessag
                                QPlainTextEdit, QPushButton, QScrollArea, QVBoxLayout, QWizard,
                                QWizardPage)
 
-from .. import backup, health, registry, systems, template, tickets, tools, vcbanner
+from .. import backup, gbvc, health, registry, systems, template, tickets, tools, vcbanner
 from ..errors import InjectError
 
 REQUIRED = "<span style='color:#c0392b'><b>REQUIRED</b></span>"
@@ -191,6 +191,28 @@ class SetupWizard(QWizard):
                 self, f"VC Console Look: {system.name}", False, text,
                 status=_check(f"vclook:{key}"), actions=actions,
                 preview=lambda key=key: self._look_preview(key)))
+
+        def gbvc_status():
+            have = gbvc.installed_kinds()
+            if not have:
+                return False, "not set up"
+            return True, "set up: " + ", ".join(gbvc.KINDS[k] for k in have)
+
+        self._add("gbvc", SetupPage(
+            self, "Emulator: Game Boy / Color (Nintendo)", False,
+            "<b>What it is:</b> Nintendo's own Game Boy emulator from the eShop's Virtual "
+            "Console – the same one as in the official GB/GBC VC games, with its menu, save "
+            "states and the original look. vcinject takes it from a GB or GBC VC title you own "
+            "and puts your game into it. It is used for Game Boy games instead of RetroArch "
+            "(you can still choose RetroArch under <i>Advanced</i>).<br><br>"
+            "<b>Needed for:</b> Game Boy and Game Boy Color games (optional: RetroArch works "
+            "too).<br><br>"
+            "<b>How to get it:</b> choose an official GB VC title (e.g. <i>Pokémon Blue</i>) "
+            "and a GBC one (e.g. <i>Pokémon Gold</i>) – the GBC title's emulator also runs "
+            "Game Boy games, so one GBC title is enough. If it is installed on your 3DS, "
+            f"dump it with GodMode9:<br><br>{GODMODE9_DUMP}",
+            status=gbvc_status,
+            actions=[("Choose VC title…", lambda p: self._pick(p, "gbvc:gbc"))]))
 
         for kind, label in systems.FORWARDER_KINDS.items():
             names = ", ".join(s.name for s in systems.SYSTEMS.values() if s.forwarder == kind)
