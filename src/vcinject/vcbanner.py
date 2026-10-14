@@ -206,30 +206,36 @@ def render_plate(template: Image.Image, title: str, subtitle: str) -> Image.Imag
     top, bottom = min(layout.rows), max(layout.rows)
     ink = (40, 40, 40, 255)
 
-    title_font = _fit(draw, title, width, 19, 12)
-    lines = [title]
-    if title_font is None:  # too long for one line: wrap into two smaller ones
-        head, sep, tail = title.partition(" - ")
-        if sep:  # "Series - Subtitle" reads best split at the dash
-            lines = [head, tail]
-        else:
-            words = title.split()
-            split = max(1, min(range(1, len(words) or 2),
-                               key=lambda i: abs(len(" ".join(words[:i])) - len(" ".join(words[i:])))))
-            lines = [" ".join(words[:split]), " ".join(words[split:])] if len(words) > 1 else [title]
-        longest = max(lines, key=lambda line: draw.textlength(line, font=_font(17)))
-        title_font = _fit(draw, longest, width, 17, 8) or _font(8)
+    one_line = _fit(draw, title, width, 19, 12)
+    head, sep, tail = title.partition(" - ")
+    if sep:  # "Series - Subtitle" reads best split at the dash
+        wrapped = [head, tail]
+    else:
+        words = title.split()
+        split = max(1, min(range(1, len(words) or 2),
+                           key=lambda i: abs(len(" ".join(words[:i])) - len(" ".join(words[i:])))))
+        wrapped = [" ".join(words[:split]), " ".join(words[split:])] if len(words) > 1 else [title]
+    longest = max(wrapped, key=lambda line: draw.textlength(line, font=_font(16)))
+    two_lines = _fit(draw, longest, width, 16, 8) if len(wrapped) == 2 else None
+    # Two lines when one line would have to shrink noticeably more.
+    if one_line is not None and (two_lines is None or one_line.size + 2 >= two_lines.size):
+        lines, title_font = [title], one_line
+    else:
+        lines, title_font = wrapped, two_lines or _font(8)
 
     sub_font = _fit(draw, subtitle, width, 13, 8) if subtitle else None
-    sub_height = 16 if sub_font else 0
+    # Title lines and subtitle form one block, centred vertically, so a short or
+    # small title doesn't leave a gap above the subtitle.
     line_height = title_font.size + 2
-    block = line_height * len(lines)
-    y = top + (bottom - top - sub_height - block) / 2 + line_height / 2
+    gap = 3 if sub_font else 0
+    sub_height = sub_font.size + 2 if sub_font else 0
+    block = line_height * len(lines) + gap + sub_height
+    y = top + (bottom - top + 1 - block) / 2
     for line in lines:
-        draw.text((center, y), line, font=title_font, fill=ink, anchor="mm")
+        draw.text((center, y + line_height / 2), line, font=title_font, fill=ink, anchor="mm")
         y += line_height
     if sub_font:
-        draw.text((center, bottom - 9), subtitle, font=sub_font, fill=ink, anchor="mm")
+        draw.text((center, y + gap + sub_height / 2), subtitle, font=sub_font, fill=ink, anchor="mm")
     return plate
 
 
