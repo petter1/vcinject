@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QLabel, QMessag
                                QPlainTextEdit, QPushButton, QScrollArea, QVBoxLayout, QWizard,
                                QWizardPage)
 
-from .. import health, registry, systems, template, tickets, tools, vcbanner
+from .. import backup, health, registry, systems, template, tickets, tools, vcbanner
 from ..errors import InjectError
 
 REQUIRED = "<span style='color:#c0392b'><b>REQUIRED</b></span>"
@@ -132,7 +132,11 @@ class SetupWizard(QWizard):
             "<br><br>Pages marked " + REQUIRED + " are needed before you can build anything. "
             "Pages marked " + OPTIONAL + " unlock more consoles or the nicer 3D look; skip them "
             "with <i>Next</i> and come back any time with <b>Setup…</b> in the main window."
-            "<br><br><b>Current state:</b>" + self._overview()))
+            "<br><br><b>Setting up a second computer?</b> If you exported your templates before "
+            "(last page of this assistant), <b>Import templates from backup…</b> restores all of "
+            "them at once."
+            "<br><br><b>Current state:</b>" + self._overview(),
+            actions=[("Import templates from backup…", self._import_backup)]))
 
         self._add("tool", SetupPage(
             self, "Build tools", True,
@@ -235,7 +239,12 @@ class SetupWizard(QWizard):
             self, "All set", None,
             "You can open this assistant any time with <b>Setup…</b> in the main window. "
             "vcinject also checks everything on every start and asks again if something goes "
-            "missing.<br><br><b>Overview:</b>" + self._overview()))
+            "missing.<br><br><b>Back up your templates:</b> <b>Export templates…</b> saves every "
+            "template in one file. Import it on another computer (first page of this assistant) "
+            "instead of setting everything up again. Keep the file private – it contains data "
+            "from your own games, so don't share or upload it."
+            "<br><br><b>Overview:</b>" + self._overview(),
+            actions=[("Export templates…", self._export_backup)]))
 
         if start_resource:
             key = start_resource if start_resource in self._ids else start_resource.split(":")[0]
@@ -303,6 +312,19 @@ class SetupWizard(QWizard):
     def _choose_library(self, page: SetupPage):
         self.main.library.choose_folder()
         page.refresh()
+
+    def _export_backup(self, page: SetupPage):
+        path, _ = QFileDialog.getSaveFileName(self, "Export templates", "vcinject-templates.zip",
+                                              "Template backup (*.zip)")
+        if path:
+            page.run(lambda log: log("Exported {} templates to {}".format(
+                *(lambda r: (len(r[1]), r[0]))(backup.export(Path(path))))), "Keep the file private.")
+
+    def _import_backup(self, page: SetupPage):
+        path, _ = QFileDialog.getOpenFileName(self, "Import templates", "",
+                                              "Template backup (*.zip)")
+        if path:
+            page.run(lambda log: log("Usable now: " + ", ".join(backup.restore(Path(path), log))))
 
     def _import_tickets(self, page: SetupPage):
         path, _ = QFileDialog.getOpenFileName(self, "Choose ticket.db", "",

@@ -6,8 +6,8 @@ import sys
 import time
 from pathlib import Path
 
-from . import (__version__, artwork, forwarder, gba, health, library, registry, serve, systems,
-               template, tickets, tools, vcbanner)
+from . import (__version__, artwork, backup, forwarder, gba, health, library, registry, serve,
+               systems, template, tickets, tools, vcbanner)
 from .builder import GbaInjectOptions, build, parse_title_id
 from .errors import InjectError, MissingResource
 
@@ -111,6 +111,9 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("title_id", type=_title_id)
 
     sub.add_parser("info", help="show tool and template status")
+    t = sub.add_parser("templates", help="back up or restore all templates as one file")
+    t.add_argument("action", choices=["export", "import"])
+    t.add_argument("file", type=Path, help="backup .zip (keep it private)")
     d = sub.add_parser("doctor", help="check everything vcinject needs; --fix sets missing parts up")
     d.add_argument("--fix", action="store_true", help="repair interactively")
     sub.add_parser("save-types", help="list GBA save types")
@@ -221,6 +224,20 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_templates(args: argparse.Namespace) -> int:
+    if args.action == "export":
+        path, contents = backup.export(args.file)
+        print(f"Exported {len(contents)} templates to {path}:")
+    else:
+        contents = backup.restore(args.file)
+        print(f"Imported from {args.file}; usable now:")
+    for label in contents:
+        print(f"  ✓ {label}")
+    if args.action == "export":
+        print("Keep this file private: it contains data from your own games.")
+    return 0
+
+
 def cmd_info(_args: argparse.Namespace) -> int:
     ok = True
     for name in tools.TOOLS:
@@ -299,7 +316,8 @@ def cmd_gui(_args: argparse.Namespace) -> int:
 
 
 COMMANDS = {"gba": cmd_gba, "build": cmd_gba, "serve": cmd_serve, "setup": cmd_setup,
-            "list": cmd_list, "library": cmd_library, "forget": cmd_forget, "doctor": cmd_doctor, "import-tickets": cmd_import_tickets, "info": cmd_info,
+            "list": cmd_list, "library": cmd_library, "forget": cmd_forget, "doctor": cmd_doctor,
+            "templates": cmd_templates, "import-tickets": cmd_import_tickets, "info": cmd_info,
             "save-types": cmd_save_types, "gui": cmd_gui}
 
 

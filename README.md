@@ -87,6 +87,19 @@ No Game Boy VC title at hand? **Create from GBA look** derives Game Boy and
 Game Boy Color looks (grey and dark cartridges, the Game Boy start-up sound)
 until you install an official one.
 
+### Backing up your templates
+
+Templates come from your own games, so they are never part of this repository.
+To move them to another computer, export them once and import them there:
+
+```sh
+vcinject templates export ~/vcinject-templates.zip   # GUI: last page of the setup assistant
+vcinject templates import ~/vcinject-templates.zip   # GUI: first page of the setup assistant
+```
+
+Keep the backup private (e.g. iCloud Drive or a USB stick) – don't share or
+upload it.
+
 ## Using the GUI
 
 1. Choose your ROM folder in the **Library** (or drop a ROM on the window).
@@ -112,6 +125,7 @@ vcinject doctor --fix                       # check and repair the setup
 vcinject setup --banner-donor vc_title.cia  # install a VC Console Look
 vcinject setup --forwarder-donor inject.cia # install an emulator template
 vcinject import-tickets ticket.db           # reserve title IDs used on your 3DS
+vcinject templates export backup.zip        # back up all templates (keep it private)
 vcinject list                               # everything built so far
 vcinject serve a.cia b.cia                  # serve existing CIAs via QR
 ```
