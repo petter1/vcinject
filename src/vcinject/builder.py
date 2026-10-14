@@ -278,6 +278,9 @@ def build_forwarder(options: GbaInjectOptions, log: Log = print) -> BuildResult:
                                                      c.title)
     log(f"Emulator:     {systems.FORWARDER_KINDS[template.kind]} forwarder")
     log(f"Save folder:  sdmc:/nsui_formwarders_data/{internal}")
+    if template.needs_dsp_firmware:
+        log("Note:         RetroArch needs the 3DS sound firmware (sdmc:/3ds/dspfirm.cdc): "
+            "run DSP1 once (GUI: 3DS Homebrew…, or 'vcinject homebrew dsp1 --qr')")
     _finish(options, c, code=template.code, exheader=exheader, romfs=romfs_image,
             logo=template.logo, save_type_name="", log=log)
     return BuildResult(c.output, c.title_id, c.product_code, None, c.warnings)

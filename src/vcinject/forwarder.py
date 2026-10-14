@@ -43,6 +43,12 @@ class ForwarderTemplate:
     internal_name: str           # the donor's, replaced in every text file
     patch_access_desc: bool      # homebrew AD (not Nintendo-signed) carries the title ID too
 
+    @property
+    def needs_dsp_firmware(self) -> bool:
+        """RetroArch builds play sound through the DSP firmware on the SD card
+        (sdmc:/3ds/dspfirm.cdc, dumped once with DSP1)."""
+        return b"dspfirm.cdc" in self.code
+
     # --- storage -----------------------------------------------------------------
 
     def save(self) -> Path:

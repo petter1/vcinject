@@ -105,6 +105,27 @@ Start the GUI with `./start-gui.command` (on macOS also by double-clicking it in
 Finder) or `.venv/bin/vcinject gui`. On the first start the **setup assistant**
 opens and walks you through the rest.
 
+## What your 3DS needs
+
+- **Every inject:** [Luma3DS](https://3ds.hacks.guide) (its signature patches are on
+  by default) and FBI to install the `.cia`.
+- **GBA** and **Game Boy with Nintendo's emulator:** nothing else.
+- **SNES (snes9x) and NES (VirtuaNES) forwarders:** nothing else – the emulator is
+  inside each `.cia`; saves go to `sdmc:/nsui_forwarders_data/<game>`.
+- **RetroArch forwarders** (Game Boy via RetroArch, Mega Drive): the 3DS's sound
+  firmware `sdmc:/3ds/dspfirm.cdc`, dumped once with **DSP1** – otherwise they have
+  no sound or don't start. RetroArch itself does not need to be installed.
+
+**3DS Homebrew…** in the GUI (or `vcinject homebrew`) lists this and installs
+homebrew by QR code, downloaded from each author's latest GitHub release and only
+for projects with an open-source licence: DSP1, FBI Reloaded, Universal-Updater,
+Checkpoint, PKSM, ftpd and Anemone3DS.
+
+```sh
+vcinject homebrew                # what the 3DS needs, and the apps
+vcinject homebrew dsp1 --qr      # download DSP1 and show a QR code for FBI
+```
+
 ## First-time setup
 
 The assistant (GUI: **Setup…**, terminal: `vcinject doctor --fix`) shows every

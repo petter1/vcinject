@@ -226,7 +226,13 @@ class SetupWizard(QWizard):
                 f"<b>Needed for:</b> only for {names} games.<br><br>"
                 f"<b>How to get it:</b> choose any existing {names} inject (<code>.cia</code>), "
                 f"for example one made with NSUI. Which game is in it doesn't matter. If it is "
-                f"installed on your 3DS, dump it with GodMode9:<br><br>{GODMODE9_DUMP}",
+                f"installed on your 3DS, dump it with GodMode9:<br><br>{GODMODE9_DUMP}"
+                f"<b>On the 3DS:</b> nothing to install – the emulator is inside every "
+                f"<code>.cia</code>. Only <b>RetroArch</b> forwarders (usually Game Boy and Mega "
+                f"Drive) need the 3DS's sound firmware on the SD card "
+                f"(<code>sdmc:/3ds/dspfirm.cdc</code>); without it they have no sound or don't "
+                f"start. <i>3DS Homebrew…</i> in the main window installs <b>DSP1</b> by QR code – "
+                f"start it once and it is done.",
                 status=_check(f"forwarder:{kind}"),
                 actions=[("Choose inject…", lambda p, kind=kind: self._pick(p, f"forwarder:{kind}"))]))
 

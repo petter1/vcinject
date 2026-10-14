@@ -697,8 +697,12 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel(objectName="muted")
         self.template_button = QPushButton("Setup…", clicked=self.open_setup)
         self.tickets_button = QPushButton("Import tickets…", clicked=self.import_tickets)
+        self.homebrew_button = QPushButton("3DS Homebrew…", clicked=self.open_homebrew)
+        self.homebrew_button.setToolTip("What your 3DS needs for injects, and homebrew apps "
+                                        "(DSP1, FBI, Checkpoint …) to install by QR code")
         status_row = QHBoxLayout()
         status_row.addWidget(self.status_label, 1)
+        status_row.addWidget(self.homebrew_button)
         status_row.addWidget(self.tickets_button)
         status_row.addWidget(self.template_button)
 
@@ -805,6 +809,12 @@ class MainWindow(QMainWindow):
             self.drop.duplicates.setText("⚠ Duplicate" + (" (identical)" if identical else "") + "…")
         self.drop.duplicates.setVisible(bool(dupes))
         self.drop.version_row.setVisible(len(group) > 1 or bool(dupes))
+
+    def open_homebrew(self):
+        from .homebrew_view import HomebrewDialog
+        dialog = HomebrewDialog(self)
+        dialog.setModal(False)
+        dialog.show()
 
     def show_duplicates(self):
         if self.rom_path is None:

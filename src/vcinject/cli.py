@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import (__version__, artwork, backup, forwarder, gba, gbvc, health, library, registry, serve,
+from . import (__version__, artwork, backup, forwarder, gba, gbvc, health, homebrew, library, registry, serve,
                systems, template, tickets, tools, vcbanner)
 from .builder import GbaInjectOptions, build, parse_title_id
 from .errors import InjectError, MissingResource
@@ -114,6 +114,13 @@ def build_parser() -> argparse.ArgumentParser:
     lib.add_argument("--zip", action="store_true",
                      help="pack every unzipped ROM into its own .zip (the original is deleted "
                           "after the zip was verified)")
+    h = sub.add_parser("homebrew", help="what the 3DS needs, and homebrew apps to install by QR "
+                                        "(downloaded from the authors' GitHub releases)")
+    h.add_argument("app", nargs="?", choices=[a.key for a in homebrew.CATALOG],
+                   help="download this app (and with --qr serve it to FBI)")
+    h.add_argument("--qr", action="store_true", help="serve the downloaded .cia with a QR code")
+    h.add_argument("--host", help="address to show in the QR code (default: this computer's)")
+    h.add_argument("--port", type=int, default=serve.DEFAULT_PORT)
     v = sub.add_parser("verify", help="check ROM dumps against No-Intro and FlashGBX checksums")
     v.add_argument("paths", type=Path, nargs="+", help="ROM files or folders (zipped ROMs too)")
     t = sub.add_parser("import-tickets",
@@ -350,6 +357,28 @@ def cmd_library(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_homebrew(args: argparse.Namespace) -> int:
+    if not args.app:
+        for name, link, text in homebrew.REQUIREMENTS:
+            print(f"{name}: {text}" + (f" ({link})" if link else ""))
+        print("RetroArch forwarders (GB via RetroArch, Mega Drive) also need the sound firmware "
+              "sdmc:/3ds/dspfirm.cdc: run DSP1 once.\n")
+        for app in homebrew.CATALOG:
+            try:
+                found = homebrew.release(app)
+                state = f"{found.tag}, {found.licence}" + ("" if found.allowed else ", not offered")
+            except InjectError as exc:
+                state = f"unavailable ({exc})"
+            print(f"  {app.key:18} {app.name} – {app.purpose} [{state}]")
+        print("\nvcinject homebrew <app> --qr  downloads it and shows a QR code for FBI")
+        return 0
+    path = homebrew.download(homebrew.APPS[args.app])
+    print(f"Downloaded {path}")
+    if args.qr:
+        return cmd_serve(argparse.Namespace(files=[path], host=args.host, port=args.port))
+    return 0
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     roms = []
     for path in args.paths:
@@ -391,7 +420,7 @@ def cmd_gui(_args: argparse.Namespace) -> int:
 
 
 COMMANDS = {"gba": cmd_gba, "build": cmd_gba, "serve": cmd_serve, "setup": cmd_setup,
-            "list": cmd_list, "library": cmd_library, "verify": cmd_verify, "forget": cmd_forget, "doctor": cmd_doctor,
+            "list": cmd_list, "library": cmd_library, "verify": cmd_verify, "homebrew": cmd_homebrew, "forget": cmd_forget, "doctor": cmd_doctor,
             "templates": cmd_templates, "import-tickets": cmd_import_tickets, "info": cmd_info,
             "save-types": cmd_save_types, "gui": cmd_gui}
 
