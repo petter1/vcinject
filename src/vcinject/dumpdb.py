@@ -64,5 +64,23 @@ def check(system_key: str, header_sha1: str, crc: str, size: int) -> tuple[str, 
     return ("good" if good else "mismatch"), entry
 
 
+_FAMILIES: dict[tuple[Path, str], dict[str, str]] = {}
+
+
+def families(system_key: str) -> dict[str, str]:
+    """CRC32 (hex) -> product code without its region letter ("DMG-APE" for every
+    language of Pokémon Blue). libretro's Game Boy lists have no serials; this is
+    what joins a game's language versions there."""
+    key = (_path(), system_key)
+    if key not in _FAMILIES:
+        found = {}
+        for entry in database(system_key).values():
+            code = entry.get("gc") or ""
+            if len(code) >= 5 and code[-1].isalpha() and "-" in code:
+                found[f"{entry.get('rc', 0):08X}"] = code[:-1]
+        _FAMILIES[key] = found
+    return _FAMILIES[key]
+
+
 def title(entry: dict) -> str:
     return f"{entry.get('gn', '')} {entry.get('ne', '')}".strip()

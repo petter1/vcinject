@@ -182,3 +182,24 @@ def test_opening_a_stack_closes_the_others(tmp_path, monkeypatch):
     assert panel._expanded == {"stack:Sonic Advance"}
     assert [e.expanded for e in panel._entries if e.kind == "stack"] == [False, True]
     panel.stop()
+
+
+def test_red_only_without_any_verified_version(tmp_path, monkeypatch):
+    monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path / "data"))
+    from vcinject.gui import libraryview
+
+    roms = tmp_path / "roms"
+    roms.mkdir()
+    for name in ("Game (USA).gba", "Game (Germany).gba", "Other (USA).gba"):
+        (roms / name).write_bytes(name.encode() * 64)
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    panel = libraryview.LibraryPanel(autoload=False)
+    panel.load(roms)
+    panel.stop()
+    for rom in panel.roms:
+        rom.release = rom.path.stem
+        rom.verified = "good" if rom.path.stem == "Game (Germany)" else "unknown"
+    panel._picked = {roms / "Game (USA).gba"}  # the unverified version is the one shown
+    panel._refresh()
+    states = {e.title: e.dump_state for e in panel._entries}
+    assert states == {"Game": "", "Other": "bad"}  # Game has a verified German version

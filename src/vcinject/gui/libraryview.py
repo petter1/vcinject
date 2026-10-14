@@ -964,7 +964,9 @@ class LibraryPanel(QFrame):
         if rom.self_dumped:
             details.append("self-dumped")
         dump = library.verified_label(rom)
-        bad = library.dump_is_bad(rom)
+        group = self._group_of.get(index) or [rom]
+        # red only when no version of the game one has is a verified dump
+        bad = library.dump_is_bad(rom) and not any(r.verified == "good" for r in group)
         if bad:  # warnings in the list too, the rest only in tooltip and details
             details.append(dump)
         note = self._group_notes.get(index, "")
@@ -982,7 +984,6 @@ class LibraryPanel(QFrame):
         tip = [str(rom.path), " · ".join(details)] + ([f"Series: {series}"] if series else []) \
             + ([f"Dump: {dump}"] if dump else [])
         region = rom.release[len(rom.title):].strip() if rom.release else ""
-        group = self._group_of.get(index) or [rom]
         versions = tuple(library.version_codes(sorted(group, key=lambda r: r is not rom)))
         if self.badges.isChecked() and not self.grid:  # no room on small covers: in the text
             details.insert(1, " ".join(versions))

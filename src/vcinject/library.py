@@ -386,6 +386,11 @@ def _identify(rom: LibraryRom, cover: bool = True, refresh: bool = False) -> Non
             rom.release, rom.method = match.name, match.method
             families = sorted(s[:3] for s in db.serials.get(match.name, ()) if len(s) == 4)
             rom.family = families[0] if families else ""
+            if not rom.family and rom.system.key in ("gb", "gbc"):
+                try:  # no serials in libretro's Game Boy lists: FlashGBX's product code
+                    rom.family = dumpdb.families(rom.system.key).get(rom.crc, "")
+                except InjectError:
+                    pass
             rom.serial = rom.serial or (sorted(db.serials.get(match.name, ())) or [""])[0]
             crcs = db.sibling_crcs(match.name)
             rom.year = artwork._metadata("releaseyear", crcs, rom.system.database)
@@ -563,6 +568,13 @@ def preferred_order(name: str, prefer: tuple[str, ...]) -> tuple:
     return rank, artwork._release_rank(name, _PREFERRED_TAGS)
 
 
+def _title_key(name: str) -> str:
+    """A title for comparing releases: without tags and case, but with its word
+    boundaries ("Dragon Quest I & II" is not "Dragon Quest III")."""
+    name = re.sub(r"\s*[\(\[].*?[\)\]]", "", name).lower().replace("&", " and ")
+    return " ".join(re.findall(r"[a-z0-9]+", name))
+
+
 def catalog(system: systems.System, prefer: tuple[str, ...] = (),
             unreleased: bool = False) -> list[CatalogGame]:
     """Every retail game of ``system`` (downloads the No-Intro list once), one entry
@@ -580,10 +592,15 @@ def catalog(system: systems.System, prefer: tuple[str, ...] = (),
             n = parent[n]
         return n
 
+    try:  # Game Boy lists have no serials: FlashGBX's product codes join languages
+        extra = dumpdb.families(system.key) if system.key in ("gb", "gbc") else {}
+    except InjectError:
+        extra = {}
     first_with: dict[str, str] = {}
     for name in names:
-        keys = {f"title:{artwork._normalize(name)}"}
+        keys = {f"title:{_title_key(name)}"}
         keys |= {f"serial:{s[:3]}" for s in db.serials.get(name, ()) if len(s) == 4}
+        keys |= {f"serial:{extra[c]}" for c in db.crcs.get(name, ()) if c in extra}
         for key in keys:
             if key in first_with:
                 parent[find(name)] = find(first_with[key])
@@ -704,6 +721,11 @@ def group_versions(roms: list[LibraryRom]) -> list[list[LibraryRom]]:
     first: dict[tuple, int] = {}
     for i, rom in enumerate(roms):
         keys = [(rom.system.key, "title", artwork._normalize(rom.release or plain_stem(rom.path)))]
+        if not rom.family and rom.crc and rom.system.key in ("gb", "gbc"):
+            try:  # indexed before Game Boy product codes were looked up
+                rom.family = dumpdb.families(rom.system.key).get(rom.crc, "")
+            except InjectError:
+                pass
         if rom.family:
             keys.append((rom.system.key, "serial", rom.family))
         if rom.sha1:
