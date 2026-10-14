@@ -23,8 +23,9 @@ with a GUI and a command line built on the same Python core.
 - **One click from ROM to console:** build the CIA and install it over Wi-Fi by
   scanning a QR code with FBI – no SD card shuffling.
 - **ROM library:** point it at your ROM folder (sub folders included) and pick
-  games from a list with covers; zipped ROMs work like unpacked ones, and one
-  click zips the whole folder; optionally list every game of a system from
+  games from a list with covers; zipped ROMs (one game per .zip) work like
+  unpacked ones, and one click packs each unpacked game into its own .zip;
+  optionally list every game of a system from
   the No-Intro database to see what your collection is missing.
 - **VC Console Look:** the official 3D banner per console – rotating cartridge
   or handheld with your game on it, the plate with title and release year in all
@@ -159,6 +160,13 @@ the series menu lists recognised series (e.g. *Pokemon (5/7)* = owned/known)
 and compilations. With missing games shown, *Owned games first* keeps your
 own games on top or mixes them into the order.
 
+**Zipping:** **Zip** packs every unpacked ROM in the library into its own
+.zip file next to it – one game per zip, named like the ROM
+(`Golden Sun (Europe).gba` → `Golden Sun (Europe).zip`), never one archive for
+the whole folder. Each original is deleted only after its zip was read back
+and verified; zips that already exist are left alone. vcinject reads zipped
+ROMs directly, so nothing needs unpacking to build an inject.
+
 **File names:** **Names** renames identified ROMs to their official release
 name – optionally after every scan – and right-click → *Self-dumped* marks a
 ROM as dumped from your own cartridge by adding ` - selfdumped` to its file
@@ -173,8 +181,8 @@ window as usual.
 ```sh
 vcinject build "Golden Sun.gba" --qr        # any supported ROM; build and install via QR
 vcinject build "Mega Man X.sfc" -o mmx.cia  # just build
-vcinject library ~/ROMs                     # list a ROM folder (.zip ROMs included)
-vcinject library ~/ROMs --zip               # pack every ROM into its own .zip
+vcinject library ~/ROMs                     # list a ROM folder (zipped ROMs included)
+vcinject library ~/ROMs --zip               # zip each game individually (one .zip per ROM)
 vcinject library ~/ROMs --clean-names       # rename to release names, report duplicates
 vcinject doctor --fix                       # check and repair the setup
 vcinject setup --banner-donor vc_title.cia  # install a VC Console Look
