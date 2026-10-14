@@ -83,3 +83,76 @@ def analyze(rom: LibraryRom, online: bool = True, cover: bool = True) -> Library
 
 def crc32(path: Path) -> str:
     return f"{zlib.crc32(Path(path).read_bytes()) & 0xFFFFFFFF:08X}"
+
+
+# --- collection: every game of a system, owned or not ------------------------------
+
+@dataclass
+class CatalogGame:
+    title: str                 # display name (preferred region)
+    releases: list[str]        # all No-Intro releases of the game
+    system: systems.System
+    year: str | None = None
+    owned: bool = False
+
+
+_PREFERRED_TAGS = {"Germany", "De", "Europe"}
+# Not part of a collection: unlicensed, pirate and aftermarket releases, tools, BIOS ...
+_NOT_GAMES = ("(Unl", "(Pirate", "(Aftermarket", "(Program", "(Tech Demo", "(Hack", "[BIOS]",
+              "(Test Program", "(Enhancement Chip")
+
+
+# Country tag whose release names a game, per UI language.
+LANGUAGE_REGION = {"de": "Germany", "fr": "France", "es": "Spain", "it": "Italy",
+                   "nl": "Netherlands", "pt": "Brazil", "ja": "Japan"}
+
+
+def preferred_order(name: str, prefer: tuple[str, ...]) -> tuple:
+    """Earlier entries of ``prefer`` win: ("Germany", "Europe") puts a German
+    release before an "(USA, Europe)" one."""
+    rank = next((i for i, p in enumerate(prefer) if f"({p}" in name or f", {p}" in name),
+                len(prefer))
+    return rank, artwork._release_rank(name, _PREFERRED_TAGS)
+
+
+def catalog(system: systems.System, prefer: tuple[str, ...] = ()) -> list[CatalogGame]:
+    """Every retail game of ``system`` (downloads the No-Intro list once), one entry
+    per game. Regional releases are joined when they share a serial family (e.g.
+    "Blaue Edition" and "Blue Version") or their title without tags."""
+    db = artwork.ReleaseDatabase.load(system=system.database)
+    names = [n for n in db.names
+             if not artwork._release_rank(n)[0] and not any(t in n for t in _NOT_GAMES)]
+    parent = {n: n for n in names}
+
+    def find(n):
+        while parent[n] != n:
+            parent[n] = parent[parent[n]]
+            n = parent[n]
+        return n
+
+    first_with: dict[str, str] = {}
+    for name in names:
+        keys = {f"title:{artwork._normalize(name)}"}
+        keys |= {f"serial:{s[:3]}" for s in db.serials.get(name, ()) if len(s) == 4}
+        for key in keys:
+            if key in first_with:
+                parent[find(name)] = find(first_with[key])
+            else:
+                first_with[key] = name
+    groups: dict[str, list[str]] = {}
+    for name in names:
+        groups.setdefault(find(name), []).append(name)
+    games = []
+    for releases in groups.values():
+        releases.sort(key=lambda n: preferred_order(n, prefer))
+        games.append(CatalogGame(releases[0].split(" (", 1)[0], releases, system))
+    return sorted(games, key=lambda g: g.title.lower())
+
+
+def mark_owned(games: list[CatalogGame], roms: list[LibraryRom]) -> int:
+    owned_names = {rom.release for rom in roms if rom.release}
+    count = 0
+    for game in games:
+        game.owned = any(name in owned_names for name in game.releases)
+        count += game.owned
+    return count

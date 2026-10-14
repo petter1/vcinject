@@ -612,6 +612,15 @@ class LibraryPanel(QFrame):
     rom_chosen = Signal(object)          # Path
     rom_install = Signal(object)         # Path, double-click: build and show the QR code
     _analyzed = Signal(int, int, object)  # scan generation, row, LibraryRom
+    _catalog_ready = Signal(int, object)  # catalog generation, list[CatalogGame]
+
+    REGIONS = {
+        "Europe": ("Europe", "Germany", "France", "Spain", "Italy", "UK", "World", "Netherlands",
+                   "Sweden", "Scandinavia", "Australia"),
+        "USA": ("USA", "World"),
+        "Japan": ("Japan",),
+        "All regions": (),
+    }
 
     ICON = QSize(40, 48)
 
@@ -640,6 +649,21 @@ class LibraryPanel(QFrame):
         for key, system in systems.SYSTEMS.items():
             self.system_filter.addItem(system.name, key)
         self.system_filter.currentIndexChanged.connect(self._filter)
+        self.system_filter.currentIndexChanged.connect(lambda: self._catalog_timer.start())
+        self.show_missing = QCheckBox("Show missing games (database)")
+        self.show_missing.setToolTip("List every game of the system from the No-Intro database "
+                                     "and grey out the ones not in your folder")
+        self.region = QComboBox()
+        for name in self.REGIONS:
+            self.region.addItem(name)
+        self.region.setVisible(False)
+        self.show_missing.toggled.connect(self.region.setVisible)
+        self.show_missing.toggled.connect(lambda: self._catalog_timer.start())
+        self.region.currentIndexChanged.connect(lambda: self._catalog_timer.start())
+        self._catalog_timer = QTimer(self, singleShot=True, interval=600,
+                                     timeout=self._refresh_catalog)
+        self._catalog: list[library.CatalogGame] = []
+        self._catalog_generation = 0
         self.list = QListWidget()
         self.list.setIconSize(self.ICON)
         self.list.setSpacing(2)
@@ -660,9 +684,12 @@ class LibraryPanel(QFrame):
         layout.addWidget(self.folder_label)
         layout.addWidget(self.search)
         layout.addWidget(self.system_filter)
+        layout.addWidget(self.show_missing)
+        layout.addWidget(self.region)
         layout.addWidget(self.list, 1)
         layout.addWidget(self.count)
         self._analyzed.connect(self._update_row)
+        self._catalog_ready.connect(self._show_catalog)
 
         folder = self.settings.value("library/folder", "")
         if folder and Path(folder).is_dir():
@@ -692,6 +719,7 @@ class LibraryPanel(QFrame):
             return
         self.folder_label.setText(str(folder))
         self.list.clear()
+        self._catalog = []
         self._rows = {}
         for row, rom in enumerate(self.roms):
             item = QListWidgetItem()
@@ -728,9 +756,11 @@ class LibraryPanel(QFrame):
     # --- display -------------------------------------------------------------
 
     def _update_row(self, generation: int, row: int, rom: library.LibraryRom):
-        if generation == self._generation and row < self.list.count():
+        if generation == self._generation and row < len(self.roms):
             self._show(self.list.item(row), rom)
             self._filter()
+            if self.show_missing.isChecked():  # newly identified ROMs change what is owned
+                self._catalog_timer.start()
 
     def _show(self, item: QListWidgetItem, rom: library.LibraryRom):
         details = [rom.system.key.upper()]
@@ -766,8 +796,70 @@ class LibraryPanel(QFrame):
                 or text in rom.folder.lower())
             self.list.item(row).setHidden(not visible)
             shown += visible
+        for offset, game in enumerate(self._catalog_missing()):
+            item = self.list.item(len(self.roms) + offset)
+            if item is not None:
+                item.setHidden(bool(text) and text not in game.title.lower())
         built = sum(1 for rom in self.roms if rom.built)
-        self.count.setText(f"{shown} of {len(self.roms)} ROMs · {built} built")
+        summary = f"{shown} of {len(self.roms)} ROMs · {built} built"
+        if self.show_missing.isChecked() and self._catalog:
+            owned = sum(g.owned for g in self._catalog)
+            summary += f"\nCollection: {owned} of {len(self._catalog)} games"
+        self.count.setText(summary)
+
+    # --- collection (all games from the database) ----------------------------
+
+    def _catalog_missing(self) -> list[library.CatalogGame]:
+        return [g for g in self._catalog if not g.owned]
+
+    def _refresh_catalog(self):
+        self._catalog_generation += 1
+        generation = self._catalog_generation
+        while self.list.count() > len(self.roms):  # drop the previous catalog rows
+            self.list.takeItem(self.list.count() - 1)
+        self._catalog = []
+        if not self.show_missing.isChecked():
+            self._filter()
+            return
+        wanted = self.system_filter.currentData()
+        keys = [wanted] if wanted else sorted({rom.system.key for rom in self.roms})
+        tags = self.REGIONS[self.region.currentText()]
+        roms = list(self.roms)
+        language = QLocale.system().name().split("_")[0]
+        prefer = tuple(t for t in (library.LANGUAGE_REGION.get(language), "Europe") if t)
+        self.count.setText("Loading the game lists…")
+
+        def work():
+            games = []
+            for key in keys:
+                try:
+                    games += library.catalog(systems.SYSTEMS[key], prefer)
+                except InjectError:
+                    continue  # offline and never downloaded: skip that system
+            if tags:
+                for game in games:
+                    game.releases = [n for n in game.releases if any(f"{t}" in n for t in tags)]
+                games = [g for g in games if g.releases]
+                for game in games:
+                    game.title = game.releases[0].split(" (", 1)[0]
+            library.mark_owned(games, roms)
+            self._catalog_ready.emit(generation, games)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_catalog(self, generation: int, games: list):
+        if generation != self._catalog_generation:
+            return
+        self._catalog = games
+        grey = self.palette().placeholderText().color()
+        for game in self._catalog_missing():
+            item = QListWidgetItem(f"{game.title}\n{game.system.key.upper()} · missing")
+            item.setForeground(grey)
+            item.setFlags(Qt.ItemIsEnabled)  # listed, but nothing to open
+            item.setToolTip("Not in your ROM folder:\n" + "\n".join(game.releases[:6]))
+            item.setSizeHint(QSize(0, 40))
+            self.list.addItem(item)
+        self._filter()
 
     def _open_current(self):
         self._open_timer.stop()

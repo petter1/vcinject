@@ -26,3 +26,40 @@ def test_analyze_offline_reports_built_roms(tmp_path, monkeypatch):
                                    rom_name=rom_path.name, product_code="", save_type="",
                                    output="", built_at=1.0))
     assert library.analyze(rom, online=False).built[0].title_id == 0x000400000F000100
+
+
+def test_catalog_groups_regions_and_marks_owned(monkeypatch):
+    from vcinject import artwork, systems
+    dat = '''
+game (
+	name "Pokemon - Emerald Version (USA, Europe)"
+	rom ( name "a.gba" size 1 crc 11111111 serial "BPEE" )
+)
+
+game (
+	name "Pokemon - Smaragd-Edition (Germany)"
+	rom ( name "b.gba" size 1 crc 22222222 serial "BPED" )
+)
+
+game (
+	name "Pokemon - Emerald Version (USA, Europe) (Beta)"
+	rom ( name "c.gba" size 1 crc 33333333 serial "BPEE" )
+)
+
+game (
+	name "Some Pirate Game (Pirate)"
+	rom ( name "d.gba" size 1 crc 44444444 )
+)
+
+game (
+	name "Golden Sun (USA, Europe)"
+	rom ( name "e.gba" size 1 crc 55555555 serial "AGSE" )
+)
+'''
+    monkeypatch.setattr(artwork.ReleaseDatabase, "load", classmethod(lambda cls, **k: cls(dat)))
+    games = library.catalog(systems.SYSTEMS["gba"], prefer=("Germany",))
+    assert [g.title for g in games] == ["Golden Sun", "Pokemon - Smaragd-Edition"]
+    rom = library.LibraryRom(path=None, system=systems.SYSTEMS["gba"], size=1,
+                             release="Pokemon - Emerald Version (USA, Europe)")
+    assert library.mark_owned(games, [rom]) == 1
+    assert games[1].owned and not games[0].owned
