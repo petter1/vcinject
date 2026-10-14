@@ -210,11 +210,13 @@ def render_plate(template: Image.Image, title: str, subtitle: str) -> Image.Imag
     head, sep, tail = title.partition(" - ")
     if sep:  # "Series - Subtitle" reads best split at the dash
         wrapped = [head, tail]
-    else:
+    elif len(title.split()) > 1:
         words = title.split()
-        split = max(1, min(range(1, len(words) or 2),
-                           key=lambda i: abs(len(" ".join(words[:i])) - len(" ".join(words[i:])))))
-        wrapped = [" ".join(words[:split]), " ".join(words[split:])] if len(words) > 1 else [title]
+        split = min(range(1, len(words)),
+                    key=lambda i: abs(len(" ".join(words[:i])) - len(" ".join(words[i:]))))
+        wrapped = [" ".join(words[:split]), " ".join(words[split:])]
+    else:  # a single word can't be wrapped
+        wrapped = [title]
     longest = max(wrapped, key=lambda line: draw.textlength(line, font=_font(16)))
     two_lines = _fit(draw, longest, width, 16, 8) if len(wrapped) == 2 else None
     # Two lines when one line would have to shrink noticeably more.

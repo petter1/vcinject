@@ -785,8 +785,8 @@ class MainWindow(QMainWindow):
             block = None
             try:
                 block = vcbanner.block_parts(self.banner_screen, title, year, publisher, lang, system)
-            except InjectError as exc:
-                self.art_status.setText(str(exc))
+            except Exception as exc:  # never leave a stale preview behind
+                self.art_status.setText(f"Preview failed: {exc}")
             self.preview.update_art(icon, None, title, None, block)
             return
         self.banner_image = self._render(

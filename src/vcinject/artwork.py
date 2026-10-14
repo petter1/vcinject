@@ -103,6 +103,15 @@ class ReleaseDatabase:
             for serial in self.serials[name]:
                 self.by_serial.setdefault(serial, []).append(name)
 
+    def siblings(self, name: str) -> list[str]:
+        """Other releases of the same game: same serial apart from the region
+        letter, or the same title without region/language tags."""
+        families = {s[:3] for s in self.serials.get(name, ()) if len(s) == 4}
+        base = _normalize(name)
+        found = [other for other, serials in self.serials.items() if other != name
+                 and ({s[:3] for s in serials} & families or _normalize(other) == base)]
+        return sorted(found, key=_release_rank)
+
     def sibling_crcs(self, name: str) -> list[str]:
         """CRCs of the release itself first, then of its other regional versions
         (same serial apart from the region letter)."""
@@ -212,6 +221,19 @@ def lookup(rom: bytes, game_code: str = "", filename: str = "",
         image = fetch_image(match.name, kind, system)
         if image is not None:
             images[kind] = image
+    # Fallback: images missing for this release often exist for another region.
+    missing = [kind for kind in kinds if kind not in images]
+    for other in db.siblings(match.name)[:6] if missing else []:
+        for kind in list(missing):
+            try:
+                image = fetch_image(other, kind, system)
+            except InjectError:
+                continue
+            if image is not None:
+                images[kind] = image
+                missing.remove(kind)
+        if not missing:
+            break
     crcs = db.sibling_crcs(match.name)
     return Artwork(match, images, year=_metadata("releaseyear", crcs, system),
                    publisher=_metadata("publisher", crcs, system))

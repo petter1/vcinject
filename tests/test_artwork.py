@@ -58,3 +58,11 @@ def test_styles_fall_back_when_art_missing():
     assert banner.size == art.BANNER_SIZE
     # asking for a style without its artwork yields generated art, not an error
     assert artwork.render_banner("logo", artwork.Artwork(), "Game").size == art.BANNER_SIZE
+
+
+def test_siblings_are_other_regions_of_the_same_game():
+    db = artwork.ReleaseDatabase(DAT)
+    # AMTE / AMTP: same serial family, so USA and Europe are the same game
+    assert db.siblings("Metroid Fusion (USA)") == ["Metroid Fusion (Europe) (En,Fr,De,Es,It)"]
+    assert "Pokemon - Emerald Version (USA, Europe)" in db.siblings("Pokemon - Emerald Version (USA, Europe) (Beta)")
+    assert "Metroid Fusion (USA)" not in db.siblings("Pokemon - Emerald Version (USA, Europe)")

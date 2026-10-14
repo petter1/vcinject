@@ -121,3 +121,11 @@ def test_missing_languages_get_a_plate(monkeypatch):
     assert sorted(sources) == list(range(13))
     assert sources[1] == b"P-us-fr"          # EUR French reuses the French plate
     assert sources[2] == b"P-us-en"          # German falls back to the first one
+
+
+def test_plate_handles_one_word_and_very_long_titles():
+    plate = fake_plate()
+    for title in ("Bionicle", "X", "Supercalifragilisticexpialidocious-Adventure-Deluxe",
+                  "A very long title with many words that will never fit on one line at all"):
+        out = vcbanner.render_plate(plate, title, "Released: 2003")
+        assert out.size == plate.size
