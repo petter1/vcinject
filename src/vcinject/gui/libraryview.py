@@ -1073,29 +1073,43 @@ class LibraryPanel(QFrame):
     # --- icons -----------------------------------------------------------------
 
     def icon(self, entry: Entry, size: QSize) -> QPixmap:
-        """Cover of an entry at ``size`` (cached); stacks show their first covers."""
+        """Cover of an entry at ``size`` (cached); stacks show their first covers.
+
+        The cache is keyed by the entry and the identity of its stored (unstyled)
+        cover: identities of short-lived styled copies get reused by Python and
+        would hand one game another game's picture."""
         style = self.missing_style.currentData()
+        dims = (size.width(), size.height())
         if entry.kind == "stack":
-            covers = tuple(self._cover_of(child) for child in entry.children[:3])
-            key = ("stack", tuple(id(c) for c in covers), style, size.width(), size.height(),
-                   entry.expanded)
+            parts = tuple((c.key, id(self._raw_cover(c))) for c in entry.children[:3])
+            key = ("stack", entry.key, parts, style, dims, entry.expanded)
             if key not in self._icons:
                 self._icons[key] = self._stack_pixmap(entry, size)
             return self._icons[key]
-        cover = self._cover_of(entry)
-        key = (entry.kind, id(cover) if cover is not None else entry.system, style,
-               size.width(), size.height())
+        raw = self._raw_cover(entry)
+        key = (entry.kind, entry.key, id(raw) if raw is not None else None, style, dims)
         if key not in self._icons:
-            self._icons[key] = self._pixmap(cover, entry, size)
+            self._icons[key] = self._pixmap(self._cover_of(entry), entry, size)
         return self._icons[key]
 
-    def _cover_of(self, entry: Entry) -> Image.Image | None:
+    def _forget_icons(self, key: str):
+        """Drop cached pictures of one entry (and of stacks showing it): its cover changed."""
+        self._icons = {k: v for k, v in self._icons.items()
+                       if k[1] != key and not (k[0] == "stack" and any(p[0] == key for p in k[2]))}
+
+    def _raw_cover(self, entry: Entry) -> Image.Image | None:
+        """The cover as stored (kept alive by the ROM or the missing-covers dict)."""
         if entry.kind == "rom":
             return entry.rom.cover if entry.rom else None
         if entry.kind == "missing":
-            cover = self._missing_covers.get(entry.key)
-            return self._style_missing(cover) if cover is not None else None
+            return self._missing_covers.get(entry.key)
         return None
+
+    def _cover_of(self, entry: Entry) -> Image.Image | None:
+        cover = self._raw_cover(entry)
+        if cover is not None and entry.kind == "missing":
+            return self._style_missing(cover)
+        return cover
 
     def _pixmap(self, cover, entry: Entry, size: QSize) -> QPixmap:
         if cover is None:  # nothing found anywhere: a box in the console's style
@@ -1261,6 +1275,7 @@ class LibraryPanel(QFrame):
 
     def _after_refresh(self, generation: int, rom: library.LibraryRom):
         if generation == self._generation:
+            self._forget_icons(f"rom:{rom.path}")
             self._schedule()
             self.rom_refreshed.emit(rom.path)
 
@@ -1510,6 +1525,7 @@ class LibraryPanel(QFrame):
         if generation != self._catalog_generation:
             return
         self._missing_covers[key] = cover
+        self._forget_icons(key)
         self._schedule()
 
     def _style_missing(self, cover: Image.Image) -> Image.Image:

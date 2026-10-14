@@ -4,6 +4,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 QtWidgets = pytest.importorskip("PySide6.QtWidgets")
+from PySide6 import QtCore  # noqa: E402
 
 
 def test_library_pop_out_button_opens_window(tmp_path, monkeypatch):
@@ -87,4 +88,27 @@ def test_library_window_views(tmp_path, monkeypatch):
     flow.go(2)
     flow.repaint()
     assert flow.current().title == "Pokemon - Emerald Version"
+    panel.stop()
+
+
+def test_missing_games_keep_their_own_covers(tmp_path, monkeypatch):
+    """Styled copies are short-lived; their reused ids must not mix up covers."""
+    monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path / "data"))
+    from PIL import Image
+    from vcinject import library, systems
+    from vcinject.gui import libraryview
+
+    qt = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    panel = libraryview.LibraryPanel(autoload=False)
+    gba = systems.SYSTEMS["gba"]
+    games = [library.CatalogGame(f"Game {i}", [f"Game {i} (Europe)"], gba) for i in range(40)]
+    panel._missing = panel._catalog = games
+    for i, game in enumerate(games):  # a different brightness per game
+        panel._missing_covers[libraryview._game_key(game)] = Image.new("RGB", (20, 20), (i * 6,) * 3)
+    panel.missing_style.setCurrentIndex(panel.missing_style.findData("bw"))
+    panel._refresh()
+    qt.processEvents()
+    for entry in panel._entries:
+        shade = panel.icon(entry, QtCore.QSize(20, 20)).toImage().pixelColor(10, 10).red()
+        assert shade == int(entry.title.split()[1]) * 6, entry.title
     panel.stop()
