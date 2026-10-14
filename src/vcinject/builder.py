@@ -182,7 +182,7 @@ def _finish(options: GbaInjectOptions, c: _Common, *, code: bytes, exheader: byt
         work = Path(tmp)
         log("Building banner...")
         banner = banner_art if isinstance(banner_art, bytes) else \
-            _make_banner(banner_art, work, gba_jingle=c.system.key == "gba")
+            _make_banner(banner_art, work, jingle_from=c.system.key)
 
         log("Building ExeFS...")
         icon = smdh.build_smdh(c.title, c.long_title, options.publisher, icon_img)
@@ -245,7 +245,8 @@ def build_forwarder(options: GbaInjectOptions, log: Log = print) -> BuildResult:
 
 
 def banner_style_for(options: GbaInjectOptions, system_key: str = "gba") -> str | None:
-    if options.banner_style is None and system_key == "gba" and vcbanner.is_installed():
+    """GBA_3D (the VC Console Look) by default when the system has a look installed."""
+    if options.banner_style is None and vcbanner.is_installed(system_key):
         return GBA_3D
     return options.banner_style
 
@@ -257,7 +258,7 @@ def _resolve_artwork(options: GbaInjectOptions, c: _Common,
     custom_banner = options.banner_image or (art.load_image(options.banner_path)
                                              if options.banner_path else None)
     style = banner_style_for(options, c.system.key)
-    three_d = style == GBA_3D and c.system.key == "gba"
+    three_d = style == GBA_3D and vcbanner.is_installed(c.system.key)
     title = c.title
     screen = options.banner_screen or (custom_banner if three_d else None)
 
@@ -287,26 +288,27 @@ def _resolve_artwork(options: GbaInjectOptions, c: _Common,
         if screen is None:
             imgs = found.images
             screen = imgs.get("title") or imgs.get("snap") or imgs.get("boxart") \
-                or art.default_banner(title)
+                or art.default_banner(title, c.system.name)
         year = options.release_year if options.release_year is not None else found.year
         return icon, vcbanner.build(screen, title, year or None,
-                                    found.publisher or options.publisher, options.plate_language)
+                                    found.publisher or options.publisher, options.plate_language,
+                                    system=c.system.key)
 
     if custom_banner is not None:
         return icon, custom_banner
     if style not in artwork.BANNER_STYLES:
         style = artwork.available(artwork.BANNER_STYLES, found)[0]
-    return icon, artwork.render_banner(style, found, title)
+    return icon, artwork.render_banner(style, found, title, c.system.name)
 
 
-def _make_banner(image: Image.Image, work: Path, gba_jingle: bool = True) -> bytes:
+def _make_banner(image: Image.Image, work: Path, jingle_from: str | None = "gba") -> bytes:
     png, wav, out = work / "banner.png", work / "banner.wav", work / "banner.bnr"
     art.letterbox(image).save(png)
     art.write_silent_wav(wav)
     tools.run_tool("bannertool", "makebanner", "-i", png, "-a", wav, "-o", out)
     banner = out.read_bytes()
-    if gba_jingle and vcbanner.is_installed():  # borrow the GBA start-up sound
+    if jingle_from and vcbanner.is_installed(jingle_from):  # the console's VC jingle
         flat = cgfx.Cbmd.parse(banner)
-        flat.cwav = vcbanner.load_template().cwav or flat.cwav
+        flat.cwav = vcbanner.load_template(jingle_from).cwav or flat.cwav
         banner = flat.build()
     return banner

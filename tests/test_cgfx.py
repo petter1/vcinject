@@ -85,3 +85,39 @@ def test_unframed_screen_is_stretched():
     tex = Image.new("RGBA", (128, 128), (1, 2, 3, 255))
     assert vcbanner.frame_content_box(tex) is None
     assert vcbanner.compose_screen(tex, Image.new("RGB", (240, 160), "blue")).size == (128, 128)
+
+
+def test_framed_picture_gets_rounded_corners():
+    tex = Image.new("RGBA", (128, 128), (0, 0, 0, 0))
+    d = ImageDraw.Draw(tex)
+    d.rounded_rectangle((2, 21, 125, 106), radius=8, fill=(126, 100, 197, 255))
+    d.rounded_rectangle((6, 25, 121, 102), radius=7, fill=(10, 200, 10, 255))
+    box = vcbanner.frame_content_box(tex)
+    assert vcbanner._inner_radius(tex, box) >= 4
+    out = vcbanner.compose_screen(tex, Image.new("RGB", (240, 160), (255, 0, 0)))
+    assert out.getpixel((box[0], box[1]))[:3] == (126, 100, 197)   # corner keeps the frame
+    assert out.getpixel((64, 64))[:3] == (255, 0, 0)
+
+
+def test_boxed_picture_like_official_vc():
+    tex = Image.new("RGBA", (128, 128), (0, 0, 0, 255))
+    ImageDraw.Draw(tex).rectangle((3, 5, 124, 108), fill=(250, 250, 250, 255))
+    box, kind = vcbanner.picture_box(tex)
+    assert kind == "boxed" and box == (3, 5, 125, 109)
+    out = vcbanner.compose_screen(tex, Image.new("RGB", (256, 224), (0, 0, 255)), "nes")
+    assert out.getpixel((60, 60))[:3] == (0, 0, 255) and out.getpixel((60, 120))[:3] == (0, 0, 0)
+
+
+def plate_cgfx_stub(monkeypatch):
+    """Pretend every CGFX blob has a 256x64 plate so region filling can be tested."""
+    tex = cgfx.TextureInfo("COMMON2", 256, 64, cgfx.FMT_LA8, 0, 0)
+    monkeypatch.setattr(cgfx, "textures", lambda data: {"COMMON2": tex} if data.startswith(b"P") else {})
+
+
+def test_missing_languages_get_a_plate(monkeypatch):
+    plate_cgfx_stub(monkeypatch)
+    cbmd = cgfx.Cbmd(common=b"C", regions={9: b"P-us-en", 10: b"P-us-fr"})
+    sources = vcbanner._region_sources(cbmd)
+    assert sorted(sources) == list(range(13))
+    assert sources[1] == b"P-us-fr"          # EUR French reuses the French plate
+    assert sources[2] == b"P-us-en"          # German falls back to the first one

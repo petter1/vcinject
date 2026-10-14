@@ -136,25 +136,29 @@ The system is detected from each template and from the ROM's extension
 (`.sfc .smc .nes .gb .gbc .md .gen .smd`). Saves of forwarders live on the SD
 card in `nsui_formwarders_data/<system>_<id>_<title>/`.
 
-### VC Console Look (3D GBA banner)
+### VC Console Look (3D banner per console)
 
-GBA VC injects made with NSUI v28+ show a 3D Game Boy Advance on the HOME
-Menu with the game on its screen and the "Virtual Console" plate (title +
-release year) below. vcinject can build the same banner, using the banner of
-an inject you already have as template. The model isn't bundled.
+Virtual Console titles show a 3D model of the console's cartridge (or the
+handheld) on the HOME Menu, with the game on it, the "Virtual Console" plate
+(title + "Released: YEAR") below and the console's jingle. vcinject builds
+this look for every console you have a template for. Each template is the
+banner of a VC title or inject you own; the models aren't bundled.
 
 ```sh
-vcinject setup --banner-donor "My NSUI inject.cia"   # .cia, .cxi or banner.bin
+vcinject setup --banner-donor "Pokémon FireRed (NSUI).cia" "Yoshi (official NES VC).cia"
 ```
 
-To get such a file from the console: GodMode9 → HOME → *Title manager* →
-`[A:] SD CARD` → pick the inject → *Build CIA (standard)*; it lands in `gm9/out`.
-
-Once installed, every build uses it by default (`--banner-style gba3d`):
-the title screen goes on the GBA's screen, and the plate shows the title and
-"Released: YEAR" in each console language (`--released 2004` to override the
-year from the database). The icon gets the bevelled VC frame
+The console is detected from each title (`--banner-system` if it can't be).
+Once a console has a look, its builds use it by default
+(`--banner-style gba3d`): the title screen goes onto the model, and the plate
+is written in every console language (`--released 2004` overrides the year).
+Banners made for one region get plates for all other languages too, so they
+show up on every console. The icon gets the bevelled VC frame
 (`--no-icon-frame` to disable).
+
+Known template layouts: the picture in a rounded frame on a transparent
+texture (newer NSUI GBA banners), in a box of an otherwise black texture
+(official Nintendo VC), or covering the whole texture (NSUI v28).
 
 ### Avoiding title IDs already on your 3DS
 

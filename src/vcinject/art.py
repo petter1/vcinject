@@ -82,12 +82,12 @@ def default_icon(title: str) -> Image.Image:
     return img
 
 
-def default_banner(title: str) -> Image.Image:
+def default_banner(title: str, system_name: str = "Game Boy Advance") -> Image.Image:
     top, bottom = _colors(title)
     img = _gradient(BANNER_SIZE, top, bottom)
     draw = ImageDraw.Draw(img)
     draw.rounded_rectangle((8, 8, 247, 119), radius=10, outline=(255, 255, 255), width=2)
-    draw.text((128, 30), "GAME BOY ADVANCE", font=_font(12), fill=(255, 255, 255), anchor="mm")
+    draw.text((128, 30), system_name.upper(), font=_font(12), fill=(255, 255, 255), anchor="mm")
     font = _fit_text(draw, title, 220, 26)
     draw.text((128, 72), title, font=font, fill="white", anchor="mm")
     return img

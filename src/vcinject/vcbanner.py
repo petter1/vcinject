@@ -1,20 +1,26 @@
-"""Virtual Console style 3D banner: a Game Boy Advance model showing the game
-on its screen, with the "Virtual Console" plate (title + release year) below.
+"""VC Console Look: the 3D banner of Virtual Console titles - a model of the
+console's cartridge / handheld showing the game, the "Virtual Console" plate
+(title + release year) below and the console's jingle.
 
-The 3D model is not part of vcinject. It is taken from a GBA VC inject the
-user already owns (e.g. one made with NSUI v28+), whose banner is reused as a
-template: only its screen texture (COMMON1) and the plate texture(s) (COMMON2)
-are replaced; model, animation and the jingle stay as they are.
+There is one template per system (GBA, NES, ...). The models are not part of
+vcinject: each template is the banner of a VC title or inject the user owns
+(official ones, or e.g. made with NSUI). Only the picture texture (COMMON1) and
+the plate texture(s) (COMMON2) are replaced; model, animation and jingle stay.
 
-Two layouts are known: NSUI v28 keeps one plate per console language in the
-CBMD's language slots and stretches the game picture over COMMON1; newer
-NSUI banners have a single plate in the common CGFX and draw the picture
-inside a coloured frame on a transparent COMMON1. Both are handled.
+Picture layouts that are handled:
+- framed: an opaque frame on a transparent texture (newer NSUI GBA banners);
+  the picture goes inside the frame, with the frame's rounded inner corners
+- boxed: the picture covers part of an otherwise black texture (official
+  Nintendo VC banners)
+- full: the picture covers the whole texture (NSUI v28)
+Plates are either one per console language (CBMD language slots) or a single
+shared one in the common CGFX.
 """
 from __future__ import annotations
 
 import functools
 import locale
+import struct
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -45,50 +51,99 @@ _BOLD_FONTS = (
 )
 
 
-def template_path() -> Path:
-    return data_dir() / "templates" / "gba_banner.bin"
+# Shell colours for the preview when the template doesn't reveal one.
+_SHELL = {"gba": (88, 72, 168), "nes": (150, 150, 156), "snes": (170, 170, 176),
+          "gb": (176, 176, 168), "gbc": (176, 176, 168), "gen": (40, 40, 44)}
 
 
-def is_installed() -> bool:
-    return template_path().is_file()
+def template_path(system: str = "gba") -> Path:
+    path = data_dir() / "templates" / "vc_looks" / f"{system}.bin"
+    legacy = data_dir() / "templates" / "gba_banner.bin"  # before per-system looks
+    if system == "gba" and not path.is_file() and legacy.is_file():
+        return legacy
+    return path
+
+
+def is_installed(system: str = "gba") -> bool:
+    return template_path(system).is_file()
+
+
+def installed_systems() -> list[str]:
+    from .systems import SYSTEMS
+    return [key for key in SYSTEMS if is_installed(key)]
 
 
 def _validate(banner: bytes) -> cgfx.Cbmd:
     cbmd = cgfx.Cbmd.parse(banner)
     if SCREEN_TEXTURE not in cgfx.textures(cbmd.common):
-        raise InjectError("This banner has no screen texture; it is not a 3D GBA VC banner.")
-    if not any(PLATE_TEXTURE in cgfx.textures(c) for c in [cbmd.common, *cbmd.regions.values()]):
+        raise InjectError("This banner has no picture texture; it is not a 3D VC banner.")
+    if not any(_is_plate(cgfx.textures(c).get(PLATE_TEXTURE)) for c in [cbmd.common, *cbmd.regions.values()]):
         raise InjectError("This banner has no 'Virtual Console' plate texture.")
     return cbmd
 
 
-def install_from(path: Path) -> Path:
-    """Install the banner of a GBA VC inject (.cia/.cxi) or a raw banner.bin."""
-    data = path.read_bytes()
+def detect_system(parts: ncch.NcchParts) -> str | None:
+    """Which console a VC title or inject is for, from what it contains."""
+    from . import romfs
+
+    code = parts.exefs_files.get(".code", b"")
+    if code[-0x10:-0xC] == b".CAA":
+        return "gba"
+    if not parts.romfs:
+        return None
+    try:
+        files = romfs.read(parts.romfs)
+    except (InjectError, struct.error, ValueError):
+        return None
+    internal = files.get("/internal_name.txt", b"").decode("utf-8", "replace")
+    prefix = {"snes": "snes", "gen": "gen", "md": "gen", "gb": "gb", "gbc": "gbc", "nes": "nes",
+              "fds": "nes"}.get(internal.split("_", 1)[0])
+    if prefix:
+        return prefix
+    for path, data in files.items():  # official VC emulators keep the game in /rom/
+        if not path.startswith("/rom/"):
+            continue
+        if data[:4] == b"TNES":
+            return "nes"
+        if len(data) > 0x150 and data[0x104:0x108] == b"\xce\xed\x66\x66":
+            return "gbc" if data[0x143] in (0x80, 0xC0) else "gb"
+    return None
+
+
+def install_from(path: Path, system: str | None = None) -> tuple[str, Path]:
+    """Install the banner of a VC title / inject (.cia/.cxi) or a raw banner.bin as
+    the look for its system (detected unless given)."""
+    data = Path(path).read_bytes()
     if data[:4] == b"CBMD":
-        banner = data
+        banner, detected = data, None
     else:
         cxi = ncch.first_cia_content(data) if data[0x100:0x104] != b"NCCH" else data
-        banner = ncch.parse_ncch(cxi).exefs_files.get("banner", b"")
+        parts = ncch.parse_ncch(cxi)
+        banner = parts.exefs_files.get("banner", b"")
         if banner[:4] != b"CBMD":
             raise InjectError("No banner found in this title.")
+        detected = detect_system(parts)
     _validate(banner)
-    target = template_path()
+    system = system or detected
+    if system is None:
+        raise InjectError("Can't tell which console this banner is for; choose the system.")
+    target = data_dir() / "templates" / "vc_looks" / f"{system}.bin"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(banner)
-    return target
+    return system, target
 
 
-@functools.lru_cache(maxsize=1)
-def _load(mtime: float) -> cgfx.Cbmd:
-    return _validate(template_path().read_bytes())
+@functools.lru_cache(maxsize=8)
+def _load(path: str, mtime: float) -> cgfx.Cbmd:
+    return _validate(Path(path).read_bytes())
 
 
-def load_template() -> cgfx.Cbmd:
-    if not is_installed():
-        raise InjectError("VC Console Look not set up. Use 'vcinject setup "
-                          "--banner-donor <your GBA VC inject.cia>'.")
-    return _load(template_path().stat().st_mtime)
+def load_template(system: str = "gba") -> cgfx.Cbmd:
+    if not is_installed(system):
+        raise InjectError(f"VC Console Look for {system.upper()} not set up. Use 'vcinject setup "
+                          f"--banner-donor <a {system.upper()} VC title or inject.cia>'.")
+    path = template_path(system)
+    return _load(str(path), path.stat().st_mtime)
 
 
 # --- the "Virtual Console" plate ---------------------------------------------------
@@ -189,21 +244,25 @@ def default_language() -> str:
     return lang if lang in RELEASED else "en"
 
 
-def _crop_3_2(source: Image.Image) -> Image.Image:
+_ASPECT = {"gba": 240 / 160, "nes": 256 / 224, "snes": 256 / 224, "gb": 160 / 144,
+           "gbc": 160 / 144, "gen": 320 / 224}
+
+
+def _crop_aspect(source: Image.Image, aspect: float) -> Image.Image:
     img = source.convert("RGB")
-    target = 240 / 160
-    if img.width / img.height > target:  # crop wider images to the GBA's 3:2
-        w = round(img.height * target)
+    if img.width / img.height > aspect * 1.02:  # crop wider images to the console's aspect
+        w = round(img.height * aspect)
         img = img.crop(((img.width - w) // 2, 0, (img.width - w) // 2 + w, img.height))
-    elif img.width / img.height < target:
-        h = round(img.width / target)
+    elif img.width / img.height < aspect / 1.02:
+        h = round(img.width / aspect)
         img = img.crop((0, (img.height - h) // 2, img.width, (img.height - h) // 2 + h))
     return img
 
 
-def screen_image(source: Image.Image, size: tuple[int, int] = (128, 128)) -> Image.Image:
-    """The game picture squeezed onto a texture the model's UVs stretch back to 3:2."""
-    return _crop_3_2(source).resize(size, Image.LANCZOS)
+def screen_image(source: Image.Image, size: tuple[int, int] = (128, 128),
+                 system: str = "gba") -> Image.Image:
+    """The game picture squeezed onto a texture the model's UVs stretch back."""
+    return _crop_aspect(source, _ASPECT.get(system, 4 / 3)).resize(size, Image.LANCZOS)
 
 
 def _close(a, b, tolerance: int = 40) -> bool:
@@ -211,10 +270,10 @@ def _close(a, b, tolerance: int = 40) -> bool:
 
 
 def frame_content_box(texture: Image.Image) -> tuple[int, int, int, int] | None:
-    """Inner box of a framed screen texture (opaque frame on transparency), or None."""
+    """Inner box of a framed picture texture (opaque frame on transparency), or None."""
     alpha = texture.getchannel("A")
     if alpha.getextrema()[0] == 255:
-        return None  # fully opaque: the picture covers the whole texture
+        return None  # fully opaque: no frame
     box = alpha.point(lambda a: 255 if a > 128 else 0).getbbox()
     if box is None:
         return None
@@ -227,13 +286,52 @@ def frame_content_box(texture: Image.Image) -> tuple[int, int, int, int] | None:
     return left + side, top + edge, right - side, bottom - edge
 
 
-def compose_screen(template: Image.Image, source: Image.Image) -> Image.Image:
-    box = frame_content_box(template)
-    if box is None:
-        return screen_image(source, template.size)
-    out = template.convert("RGBA").copy()
+def _inner_radius(texture: Image.Image, box: tuple[int, int, int, int]) -> int:
+    """Radius of the frame's rounded inner corners: how far the frame colour
+    reaches along the diagonal into the content box's corner."""
     left, top, right, bottom = box
-    out.paste(_crop_3_2(source).resize((right - left, bottom - top), Image.LANCZOS), (left, top))
+    px = texture.load()
+    border = px[left - 1, (top + bottom) // 2]
+    reach = next((d for d in range(0, min(right - left, bottom - top) // 4)
+                  if not _close(px[left + d, top + d], border)), 0)
+    # a quarter circle of radius r leaves r * (1 - 1/sqrt(2)) frame pixels on the diagonal
+    return min(round(reach / 0.2929), (bottom - top) // 3) if reach else 0
+
+
+def picture_box(texture: Image.Image) -> tuple[tuple[int, int, int, int], str]:
+    """Where the game picture sits in a template's picture texture, and how."""
+    box = frame_content_box(texture)
+    if box is not None:
+        return box, "framed"
+    rgb = texture.convert("RGB")
+    content = rgb.point(lambda v: 255 if v > 12 else 0).convert("L").point(
+        lambda v: 255 if v else 0).getbbox()
+    w, h = texture.size
+    if content is not None:
+        left, top, right, bottom = content
+        margins = (left, top, w - right, h - bottom)
+        area = (right - left) * (bottom - top)
+        if max(margins) >= 3 and area >= 0.4 * w * h:
+            return content, "boxed"
+    return (0, 0, w, h), "full"
+
+
+def compose_screen(template: Image.Image, source: Image.Image, system: str = "gba") -> Image.Image:
+    box, kind = picture_box(template)
+    if kind == "full":
+        return screen_image(source, template.size, system)
+    left, top, right, bottom = box
+    picture = _crop_aspect(source, _ASPECT.get(system, 4 / 3)).resize(
+        (right - left, bottom - top), Image.LANCZOS)
+    out = template.convert("RGBA").copy()
+    mask = None
+    if kind == "framed":
+        radius = _inner_radius(template, box)
+        if radius:
+            mask = Image.new("L", picture.size, 0)
+            ImageDraw.Draw(mask).rounded_rectangle((0, 0, picture.width - 1, picture.height - 1),
+                                                   radius=radius, fill=255)
+    out.paste(picture, (left, top), mask)
     return out
 
 
@@ -243,129 +341,109 @@ def released_text(lang: str, year: str | None, fallback: str = "") -> str:
     return RELEASED.get(lang, RELEASED["en"]).format(year)
 
 
+def _is_plate(tex) -> bool:
+    """A real plate texture; official banners also carry tiny placeholders by that name."""
+    return tex is not None and tex.width >= 128 and tex.height >= 32
+
+
 def _replace_plate(cgfx_data: bytes, title: str, subtitle: str) -> bytes:
     tex = cgfx.textures(cgfx_data).get(PLATE_TEXTURE)
-    if tex is None:
+    if not _is_plate(tex):
         return cgfx_data
     plate = render_plate(cgfx.decode_texture(cgfx_data, tex), title, subtitle)
     return cgfx.replace_texture(cgfx_data, PLATE_TEXTURE, plate)
 
 
 def build(screen: Image.Image, title: str, year: str | None, publisher: str = "",
-          lang: str | None = None) -> bytes:
+          lang: str | None = None, system: str = "gba") -> bytes:
     """Banner bytes. ``lang`` picks the language of a single shared plate; banners
     with per-language plates are localised for every console language."""
-    cbmd = load_template()
+    cbmd = load_template(system)
     common_tex = cgfx.textures(cbmd.common)[SCREEN_TEXTURE]
-    picture = compose_screen(cgfx.decode_texture(cbmd.common, common_tex), screen)
+    picture = compose_screen(cgfx.decode_texture(cbmd.common, common_tex), screen, system)
     common = cgfx.replace_texture(cbmd.common, SCREEN_TEXTURE, picture)
     common = _replace_plate(common, title, released_text(lang or default_language(), year, publisher))
     regions = {}
-    for index, region_cgfx in cbmd.regions.items():
+    sources = _region_sources(cbmd)
+    for index, region_cgfx in sources.items():
         region_lang = cgfx.REGIONS[index].split("-")[1] if index < len(cgfx.REGIONS) else "en"
         regions[index] = _replace_plate(region_cgfx, title, released_text(region_lang, year, publisher))
     return cgfx.Cbmd(common, regions, cbmd.cwav).build()
 
 
-def has_localised_plates() -> bool:
-    return any(PLATE_TEXTURE in cgfx.textures(c) for c in load_template().regions.values())
+def _region_sources(cbmd: cgfx.Cbmd) -> dict[int, bytes]:
+    """Per-language CGFX for every console language. Banners made for one region
+    (e.g. a US title with en/fr/es/pt plates) would show no plate elsewhere, so
+    missing languages get a copy of an existing plate CGFX, localised later."""
+    with_plate = {i: c for i, c in cbmd.regions.items() if _is_plate(cgfx.textures(c).get(PLATE_TEXTURE))}
+    if not with_plate:
+        return dict(cbmd.regions)
+    sources = dict(cbmd.regions)
+    for index, region in enumerate(cgfx.REGIONS):
+        if index in sources:
+            continue
+        lang = region.split("-")[1]
+        same_lang = [i for i in with_plate if cgfx.REGIONS[i].endswith(lang)]
+        sources[index] = with_plate[(same_lang or sorted(with_plate))[0]]
+    return sources
+
+
+def has_localised_plates(system: str = "gba") -> bool:
+    return any(_is_plate(cgfx.textures(c).get(PLATE_TEXTURE)) for c in load_template(system).regions.values())
 
 
 def plate_preview(title: str, year: str | None, publisher: str = "",
-                  lang: str | None = None) -> Image.Image:
-    cbmd = load_template()
+                  lang: str | None = None, system: str = "gba") -> Image.Image:
+    cbmd = load_template(system)
     lang = lang or default_language()
-    candidates = [i for i, r in enumerate(cgfx.REGIONS)
-                  if r.endswith(lang) and PLATE_TEXTURE in cgfx.textures(cbmd.regions.get(i, b"CGFX"))] \
-        if cbmd.regions else []
-    source = cbmd.regions[candidates[0]] if candidates else (
-        cbmd.common if PLATE_TEXTURE in cgfx.textures(cbmd.common)
-        else next(c for c in cbmd.regions.values() if PLATE_TEXTURE in cgfx.textures(c)))
+    sources = _region_sources(cbmd)
+    candidates = [i for i in sorted(sources) if cgfx.REGIONS[i].endswith(lang)
+                  and _is_plate(cgfx.textures(sources[i]).get(PLATE_TEXTURE))]
+    source = sources[candidates[0]] if candidates else (
+        cbmd.common if _is_plate(cgfx.textures(cbmd.common).get(PLATE_TEXTURE))
+        else next(c for c in sources.values() if _is_plate(cgfx.textures(c).get(PLATE_TEXTURE))))
     tex = cgfx.textures(source)[PLATE_TEXTURE]
     return render_plate(cgfx.decode_texture(source, tex), title, released_text(lang, year, publisher))
 
 
-def body_color() -> tuple[int, int, int]:
-    """Main colour of the model, for the GUI mock-up."""
-    cbmd = load_template()
+def body_color(system: str = "gba") -> tuple[int, int, int]:
+    """Main colour of the model, for the GUI preview."""
+    cbmd = load_template(system)
     textures = cgfx.textures(cbmd.common)
     screen = cgfx.decode_texture(cbmd.common, textures[SCREEN_TEXTURE])
     box = frame_content_box(screen)
     if box is not None:  # the frame around the picture has the shell colour
         return screen.getpixel((box[0] - 1, (box[1] + box[3]) // 2))[:3]
-    for name, tex in textures.items():
-        if name in (SCREEN_TEXTURE, PLATE_TEXTURE):
-            continue
-        try:
-            img = cgfx.decode_texture(cbmd.common, tex)
-        except InjectError:
-            continue
-        return img.convert("RGB").resize((1, 1), Image.BOX).getpixel((0, 0))
-    return (88, 72, 168)
-
-
-def mockup(screen: Image.Image, title: str, year: str | None, publisher: str = "",
-           lang: str | None = None) -> Image.Image:
-    """Approximate top-screen view of the 3D banner (400x240) for previews.
-
-    The real banner is a 3D model rendered by the HOME Menu; this flat drawing
-    only shows which picture and text end up where.
-    """
-    from PIL import ImageEnhance
-
-    cbmd = load_template()
-    screen_tex = cgfx.decode_texture(cbmd.common, cgfx.textures(cbmd.common)[SCREEN_TEXTURE])
-    if frame_content_box(screen_tex) is not None:
-        return _block_mockup(compose_screen(screen_tex, screen), title, year, publisher, lang)
-
-    img = Image.new("RGBA", (400, 240), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    body = body_color()
-    if sum(body) < 360:  # shell textures are shaded; brighten for a flat drawing
-        body = ImageEnhance.Brightness(Image.new("RGB", (1, 1), body)).enhance(1.35).getpixel((0, 0))
-    shade = tuple(max(0, c - 28) for c in body)
-
-    draw.rounded_rectangle((62, 26, 338, 166), radius=38, fill=shade)
-    draw.rounded_rectangle((62, 22, 338, 160), radius=38, fill=body)
-    draw.rounded_rectangle((128, 34, 272, 140), radius=8, fill=(52, 52, 60))
-    draw.rectangle((140, 44, 260, 124), fill=(0, 0, 0))
-    img.paste(screen_image(screen, (120, 80)), (140, 44))
-    draw.text((200, 132), "GAME BOY ADVANCE", font=_font(7), fill=(200, 200, 210), anchor="mm")
-    # D-pad and buttons
-    draw.rounded_rectangle((90, 82, 122, 92), radius=2, fill=(220, 220, 228))
-    draw.rounded_rectangle((101, 71, 111, 103), radius=2, fill=(220, 220, 228))
-    for cx, cy in ((290, 78), (272, 94)):
-        draw.ellipse((cx - 9, cy - 9, cx + 9, cy + 9), fill=(220, 220, 228))
-
-    img.alpha_composite(plate_preview(title, year, publisher, lang), (72, 172))
-    return img
+    return _SHELL.get(system, (150, 150, 156))
 
 
 def block_parts(screen: Image.Image, title: str, year: str | None, publisher: str = "",
-                lang: str | None = None):
-    """For block-style templates: (front face, plate, side colour) to animate; else None."""
-    cbmd = load_template()
+                lang: str | None = None, system: str = "gba"):
+    """(front face, plate, shell colour) for the rotating preview of a VC look."""
+    cbmd = load_template(system)
     screen_tex = cgfx.decode_texture(cbmd.common, cgfx.textures(cbmd.common)[SCREEN_TEXTURE])
-    if frame_content_box(screen_tex) is None:
-        return None
-    face = compose_screen(screen_tex, screen)
-    face = face.crop(face.getchannel("A").getbbox())
-    return face, plate_preview(title, year, publisher, lang), body_color()
+    face = compose_screen(screen_tex, screen, system)
+    box, kind = picture_box(screen_tex)
+    if kind == "framed":
+        face = face.crop(face.getchannel("A").getbbox())
+    elif kind == "boxed":
+        face = face.crop(box)
+    else:
+        face = _crop_aspect(screen, _ASPECT.get(system, 4 / 3)).resize((128, 96)).convert("RGBA")
+    return face, plate_preview(title, year, publisher, lang, system), body_color(system)
 
 
-def _block_mockup(face: Image.Image, title: str, year: str | None, publisher: str,
-                  lang: str | None) -> Image.Image:
-    """Newer NSUI banners: a rotating block with the framed picture on its front."""
+def mockup(screen: Image.Image, title: str, year: str | None, publisher: str = "",
+           lang: str | None = None, system: str = "gba") -> Image.Image:
+    """Static top-screen approximation (400x240) of the 3D banner."""
+    face, plate, shell = block_parts(screen, title, year, publisher, lang, system)
     img = Image.new("RGBA", (400, 240), (0, 0, 0, 0))
-    face = face.crop(face.getchannel("A").getbbox())
     face = face.resize((round(face.width * 1.15), round(face.height * 1.15)), Image.LANCZOS)
     x, y = (400 - face.width) // 2, 30
-    # side of the block: the frame colour, darker, offset to the lower right
-    side = Image.new("RGBA", face.size, tuple(max(0, c - 45) for c in body_color()) + (255,))
+    side = Image.new("RGBA", face.size, tuple(max(0, c - 45) for c in shell) + (255,))
     side.putalpha(face.getchannel("A"))
     for depth in range(10, 0, -1):
         img.alpha_composite(side, (x + depth, y + depth // 2))
     img.alpha_composite(face, (x, y))
-    img.alpha_composite(plate_preview(title, year, publisher, lang), (72, 172))
+    img.alpha_composite(plate, (72, 172))
     return img
-

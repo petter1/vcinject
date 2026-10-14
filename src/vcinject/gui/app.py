@@ -373,7 +373,7 @@ class ArtPicker(QWidget):
         return self.combo.currentData()
 
     def _on_index(self, _index):
-        if self.style == GBA_3D and not vcbanner.is_installed():
+        if self.style == GBA_3D and not vcbanner.is_installed(self.window().system.key):
             if not self.window().install_banner_template():
                 self.combo.setCurrentIndex(0 if self.combo.currentIndex() else 1)
                 return
@@ -706,11 +706,9 @@ class MainWindow(QMainWindow):
     def _apply_artwork(self):
         self.icon_picker.set_available(artwork.available(artwork.ICON_STYLES, self.found))
         flat = artwork.available(artwork.BANNER_STYLES, self.found)
-        if self.system.key != "gba":  # the VC Console Look model is a GBA block
-            self.banner_picker.set_available(flat)
-        else:  # prefer it once set up; otherwise offer it last
-            self.banner_picker.set_available([GBA_3D, *flat] if vcbanner.is_installed()
-                                             else [*flat, GBA_3D])
+        # The console's VC Console Look first once it is set up; otherwise offer it last.
+        self.banner_picker.set_available([GBA_3D, *flat] if vcbanner.is_installed(self.system.key)
+                                         else [*flat, GBA_3D])
         self.refresh_status()
 
     def browse_output(self):
@@ -741,24 +739,23 @@ class MainWindow(QMainWindow):
         self.icon_image = self._render(self.icon_picker, artwork.render_icon)
         icon = art.vc_icon_frame(self.icon_image) if self.frame_check.isChecked() else self.icon_image
         self.banner_screen = None
-        if self.banner_picker.style == GBA_3D and vcbanner.is_installed() \
-                and self.system.key == "gba":
+        system = self.system.key
+        if self.banner_picker.style == GBA_3D and vcbanner.is_installed(system):
             imgs = self.found.images
             self.banner_screen = imgs.get("title") or imgs.get("snap") or imgs.get("boxart") \
-                or art.default_banner(title)
+                or art.default_banner(title, self.system.name)
             self.banner_image = None
             year, publisher = self.released_edit.text().strip(), self.publisher_edit.text().strip()
             lang = self.plate_lang.currentData()
-            top = block = None
+            block = None
             try:
-                block = vcbanner.block_parts(self.banner_screen, title, year, publisher, lang)
-                if block is None:
-                    top = vcbanner.mockup(self.banner_screen, title, year, publisher, lang)
+                block = vcbanner.block_parts(self.banner_screen, title, year, publisher, lang, system)
             except InjectError as exc:
                 self.art_status.setText(str(exc))
-            self.preview.update_art(icon, None, title, top, block)
+            self.preview.update_art(icon, None, title, None, block)
             return
-        self.banner_image = self._render(self.banner_picker, artwork.render_banner)
+        self.banner_image = self._render(
+            self.banner_picker, lambda st, found, t: artwork.render_banner(st, found, t, self.system.name))
         self.preview.update_art(icon, self.banner_image, title)
 
     # --- template / tools --------------------------------------------------
@@ -767,23 +764,23 @@ class MainWindow(QMainWindow):
         need = self._missing_template()
         self.setup_button.setVisible(need is not None)
         if need == "vclook":
-            self.setup_button.setText("Set up VC Console Look (default look)…")
+            self.setup_button.setText(f"Set up VC Console Look for {self.system.name}…")
         elif need:
             self.setup_button.setText(f"Set up {systems.FORWARDER_KINDS[need]} emulator template…")
         missing = [name for name in tools.TOOLS if tools.find_tool(name) is None]
         emulators = forwarder.installed_kinds()
         parts = [f"vcinject {__version__}",
                  "template " + ("installed" if template.is_installed() else "will be downloaded"),
-                 "VC Console Look " + ("installed" if vcbanner.is_installed() else "not set up"),
+                 "VC looks: " + (", ".join(k.upper() for k in vcbanner.installed_systems()) or "none"),
                  f"emulators {len(emulators)}/{len(systems.FORWARDER_KINDS)}",
                  "tools OK" if not missing else "missing " + ", ".join(missing)]
         self.status_label.setText("  ·  ".join(parts))
 
     def _missing_template(self) -> str | None:
         """'vclook', a forwarder kind, or None when the current ROM has all it needs."""
-        if self.system.forwarder:
-            return None if self.system.forwarder in forwarder.installed_kinds() else self.system.forwarder
-        return None if vcbanner.is_installed() else "vclook"
+        if self.system.forwarder and self.system.forwarder not in forwarder.installed_kinds():
+            return self.system.forwarder
+        return None if vcbanner.is_installed(self.system.key) else "vclook"
 
     def _setup_needed(self):
         need = self._missing_template()
@@ -846,17 +843,37 @@ class MainWindow(QMainWindow):
     def install_banner_template(self) -> bool:
         QMessageBox.information(
             self, "VC Console Look",
-            "The VC Console Look (3D Game Boy Advance with the 'Virtual Console' plate) "
-            "reuses the banner of a GBA VC inject you already have, e.g. one made with NSUI "
-            "v28 or newer.\n\nChoose that inject's .cia (or a .cxi / banner.bin). Only its "
-            "banner is used; picture and text are replaced for every build.")
-        path, _ = QFileDialog.getOpenFileName(self, "Choose a GBA VC inject", "", INJECT_FILTER)
-        if not path:
+            "The VC Console Look is the 3D banner of Virtual Console titles: the console's "
+            "cartridge or handheld showing the game, the 'Virtual Console' plate with title and "
+            "release year, and the console's jingle.\n\nChoose a VC title or inject you own "
+            "with such a banner (e.g. an official VC game or an NSUI v28+ GBA inject), one "
+            "per console. Only its banner is used; picture and text are replaced per build.")
+        paths, _ = QFileDialog.getOpenFileNames(self, "Choose VC titles / injects", "",
+                                                INJECT_FILTER)
+        if not paths:
             return False
-        try:
-            vcbanner.install_from(Path(path))
-        except (OSError, InjectError) as exc:
-            QMessageBox.critical(self, "Not usable", str(exc))
+        done, errors = [], []
+        for path in paths:
+            try:
+                system, _ = vcbanner.install_from(Path(path))
+            except InjectError as exc:
+                if "choose the system" not in str(exc):
+                    errors.append(f"{Path(path).name}: {exc}")
+                    continue
+                try:  # banner without a detectable console: use the current ROM's
+                    system, _ = vcbanner.install_from(Path(path), self.system.key)
+                except (OSError, InjectError) as exc2:
+                    errors.append(f"{Path(path).name}: {exc2}")
+                    continue
+            except OSError as exc:
+                errors.append(f"{Path(path).name}: {exc}")
+                continue
+            done.append(systems.SYSTEMS[system].name)
+        text = ("Installed for: " + ", ".join(done)) if done else ""
+        if errors:
+            text += ("\n\n" if text else "") + "Not usable:\n" + "\n".join(errors)
+        QMessageBox.information(self, "VC Console Look", text)
+        if not done:
             return False
         self.refresh_status()
         self._art_timer.start()

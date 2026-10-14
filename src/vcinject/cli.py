@@ -88,9 +88,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--donor", type=Path,
                    help="extract the template from your own decrypted GBA VC .cia/.cxi "
                         "instead of downloading it")
-    s.add_argument("--banner-donor", type=Path,
-                   help="use the 3D GBA banner of one of your GBA VC injects (.cia/.cxi/"
-                        "banner.bin, e.g. made with NSUI v28) for the VC Console Look")
+    s.add_argument("--banner-donor", type=Path, nargs="+", metavar="TITLE",
+                   help="VC Console Look: use the 3D banner of VC titles or injects you own "
+                        "(.cia/.cxi/banner.bin), one per console; the console is detected")
+    s.add_argument("--banner-system", choices=sorted(systems.SYSTEMS),
+                   help="console for --banner-donor when it can't be detected")
     s.add_argument("--forwarder-donor", type=Path, nargs="+", metavar="INJECT",
                    help="use existing emulator injects (RetroArch / snes9x / VirtuaNES, e.g. "
                         "made with NSUI) as templates for SNES, NES, GB/GBC and Mega Drive")
@@ -152,9 +154,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
         for donor in args.forwarder_donor:
             t = forwarder.install_from(donor)
             print(f"{systems.FORWARDER_KINDS[t.kind]} template installed from {donor.name}")
-    if args.banner_donor:
-        path = vcbanner.install_from(args.banner_donor)
-        print(f"VC Console Look installed: {path}")
+    for donor in args.banner_donor or []:
+        system, _path = vcbanner.install_from(donor, args.banner_system)
+        print(f"VC Console Look for {systems.SYSTEMS[system].name} installed from {donor.name}")
     if (args.banner_donor or args.forwarder_donor) and not args.donor:
         return 0
     if args.donor:
@@ -176,7 +178,9 @@ def cmd_info(_args: argparse.Namespace) -> int:
     installed = template.is_installed()
     ok &= installed
     print(f"{'template':12} {template.template_dir() if installed else 'MISSING (run vcinject setup)'}")
-    print(f"{'VC look':12} {vcbanner.template_path() if vcbanner.is_installed() else 'not installed (optional: vcinject setup --banner-donor <inject.cia>)'}")
+    looks = vcbanner.installed_systems()
+    print(f"{'VC look':12} " + (", ".join(systems.SYSTEMS[k].name for k in looks) if looks
+                                else "none (optional: vcinject setup --banner-donor <title.cia>)"))
     installed = forwarder.installed_kinds()
     for kind, label in systems.FORWARDER_KINDS.items():
         state = "installed" if kind in installed else "not set up (vcinject setup --forwarder-donor <inject.cia>)"

@@ -342,7 +342,8 @@ def render_icon(style: str, artwork: Artwork, title: str) -> Image.Image:
     return art.default_icon(title)
 
 
-def render_banner(style: str, artwork: Artwork, title: str) -> Image.Image:
+def render_banner(style: str, artwork: Artwork, title: str,
+                  system_name: str = "Game Boy Advance") -> Image.Image:
     imgs = artwork.images
     size = art.BANNER_SIZE
     backdrop = imgs.get("boxart") or imgs.get("title")
@@ -352,7 +353,7 @@ def render_banner(style: str, artwork: Artwork, title: str) -> Image.Image:
         return _on_backdrop(backdrop, imgs["title"], size, (180, 116), frame=True)
     if style == "boxart" and "boxart" in imgs:
         return _on_backdrop(imgs["boxart"], imgs["boxart"], size, (240, 118))
-    return art.default_banner(title)
+    return art.default_banner(title, system_name)
 
 
 def default_art(artwork: Artwork, title: str) -> tuple[Image.Image, Image.Image]:

@@ -80,3 +80,23 @@ def test_missing_template_message(tmp_path, monkeypatch):
     monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path / "data"))
     with pytest.raises(InjectError, match="--forwarder-donor"):
         forwarder.ForwarderTemplate.load("gen")
+
+
+def test_detect_system_from_titles(tmp_path):
+    from vcinject import vcbanner
+
+    def parts(files=None, code=b"X"):
+        exefs = ncch.build_exefs([(".code", code)])
+        image = romfs.build(files) if files else b""
+        return ncch.parse_ncch(ncch.build_ncch(title_id=1, product_code="T", exheader=bytes(0x800),
+                                               exefs=exefs, romfs=image))
+
+    assert vcbanner.detect_system(parts(code=b"\0" * 0x300 + b".CAA" + b"\0" * 12)) == "gba"
+    assert vcbanner.detect_system(parts({"/rom/NESYM0A.070": b"TNES" + b"\0" * 64})) == "nes"
+    gb = bytearray(0x200)
+    gb[0x104:0x108] = b"\xce\xed\x66\x66"
+    assert vcbanner.detect_system(parts({"/rom/rom.bin": bytes(gb)})) == "gb"
+    gb[0x143] = 0x80
+    assert vcbanner.detect_system(parts({"/rom/rom.bin": bytes(gb)})) == "gbc"
+    assert vcbanner.detect_system(parts({"/internal_name.txt": b"gen_1_x", "/rom.md": b"r"})) == "gen"
+    assert vcbanner.detect_system(parts({"/other.bin": b"?"})) is None
