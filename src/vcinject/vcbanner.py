@@ -306,10 +306,67 @@ def _inner_radius(texture: Image.Image, box: tuple[int, int, int, int]) -> int:
     return min(round(reach / 0.2929), (bottom - top) // 3) if reach else 0
 
 
+def _screen_box(texture: Image.Image) -> tuple[int, int, int, int] | None:
+    """The display of a device face (official GB/GBC banners): the largest block
+    of mostly bright rows and columns inside the darker bezel, or None."""
+    rgba = texture.convert("RGBA")
+    px = rgba.load()
+    w, h = rgba.size
+    bright = [[px[x, y][3] > 128 and sum(px[x, y][:3]) / 3 > 140 for x in range(w)]
+              for y in range(h)]
+
+    def span(flags, gap=3):
+        """Longest run of True, bridging up to ``gap`` False entries."""
+        best, start, misses = (0, 0), None, 0
+        for i, flag in enumerate(list(flags) + [False] * (gap + 1)):
+            if flag:
+                start = i if start is None else start
+                misses = 0
+            elif start is not None:
+                misses += 1
+                if misses > gap:
+                    end = i - misses + 1
+                    if end - start > best[1] - best[0]:
+                        best = (start, end)
+                    start, misses = None, 0
+        return best
+
+    top, bottom = span(sum(row) >= 0.25 * w for row in bright)
+    if bottom - top < 0.2 * h:
+        return None
+    height = bottom - top
+    left, right = span(sum(bright[y][x] for y in range(top, bottom)) >= 0.25 * height
+                       for x in range(w))
+    if right - left < 0.2 * w:
+        return None
+
+    # Darker parts of the picture (e.g. a blue sky) may have been cut off: grow the
+    # box up and down until a row looks like the bezel or the display's dark edge.
+    bezel = px[max(0, left - 4), (top + bottom) // 2][:3]
+
+    def is_edge(y):
+        row = [px[x, y] for x in range(left, right)]
+        near_bezel = sum(_close(p, bezel) for p in row) / len(row)
+        black = sum(sum(p[:3]) / 3 < 40 for p in row) / len(row)
+        return near_bezel > 0.5 or black > 0.6 or any(p[3] < 128 for p in row)
+
+    while top > 0 and not is_edge(top - 1):
+        top -= 1
+    while bottom < h and not is_edge(bottom):
+        bottom += 1
+    return left, top, right, bottom
+
+
 def picture_box(texture: Image.Image) -> tuple[tuple[int, int, int, int], str]:
     """Where the game picture sits in a template's picture texture, and how."""
     box = frame_content_box(texture)
     if box is not None:
+        alpha_box = texture.getchannel("A").point(lambda a: 255 if a > 128 else 0).getbbox()
+        screen = _screen_box(texture)
+        if screen is not None and alpha_box is not None:
+            face = (alpha_box[2] - alpha_box[0]) * (alpha_box[3] - alpha_box[1])
+            if (screen[2] - screen[0]) * (screen[3] - screen[1]) < 0.65 * face:
+                return screen, "screen"  # a display inside a device face
         return box, "framed"
     rgb = texture.convert("RGB")
     content = rgb.point(lambda v: 255 if v > 12 else 0).convert("L").point(
@@ -322,6 +379,22 @@ def picture_box(texture: Image.Image) -> tuple[tuple[int, int, int, int], str]:
         if max(margins) >= 3 and area >= 0.4 * w * h:
             return content, "boxed"
     return (0, 0, w, h), "full"
+
+
+def _tint_like(picture: Image.Image, reference: Image.Image) -> Image.Image:
+    """Map a grey Game Boy picture onto the template display's own colours (dark
+    to light), so it shows the green-grey DMG look of official banners."""
+    pixels = sorted(reference.convert("RGB").getdata(), key=sum)
+    if not pixels:
+        return picture
+    dark = pixels[len(pixels) // 50]
+    light = pixels[-1 - len(pixels) // 50]
+    grey = picture.convert("L")
+    channels = []
+    for i in range(3):
+        lo, hi = dark[i], light[i]
+        channels.append(grey.point(lambda v, lo=lo, hi=hi: round(lo + (hi - lo) * v / 255)))
+    return Image.merge("RGB", channels)
 
 
 def compose_screen(template: Image.Image, source: Image.Image, system: str = "gba") -> Image.Image:
@@ -342,6 +415,8 @@ def compose_screen(template: Image.Image, source: Image.Image, system: str = "gb
         picture.paste(fit, ((width - fit.width) // 2, (height - fit.height) // 2))
     else:
         picture = game.resize((width, height), Image.LANCZOS)
+    if kind == "screen" and system == "gb":
+        picture = _tint_like(picture, template.crop(box))
     out = template.convert("RGBA").copy()
     mask = None
     if kind == "framed":
@@ -430,10 +505,40 @@ def body_color(system: str = "gba") -> tuple[int, int, int]:
     cbmd = load_template(system)
     textures = cgfx.textures(cbmd.common)
     screen = cgfx.decode_texture(cbmd.common, textures[SCREEN_TEXTURE])
-    box = frame_content_box(screen)
-    if box is not None:  # the frame around the picture has the shell colour
+    box, kind = picture_box(screen)
+    if kind == "framed":  # the frame around the picture has the shell colour
         return screen.getpixel((box[0] - 1, (box[1] + box[3]) // 2))[:3]
     return _SHELL.get(system, (150, 150, 156))
+
+
+def _face_around(texture: Image.Image, box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    """The device face holding the display: the opaque rows connected to it. Other
+    parts of the texture (e.g. a "Nintendo GAME BOY" strip) are separated by
+    transparent rows and belong to other faces of the model."""
+    alpha = texture.getchannel("A").load()
+    w, h = texture.size
+    left, top, right, bottom = box
+
+    def opaque(y):
+        return any(alpha[x, y] > 128 for x in range(left, right))
+
+    while top > 0 and opaque(top - 1):
+        top -= 1
+    while bottom < h and opaque(bottom):
+        bottom += 1
+    columns = [x for x in range(w) if any(alpha[x, y] > 128 for y in range(top, bottom))]
+    return (columns[0], top, columns[-1] + 1, bottom) if columns else (0, top, w, bottom)
+
+
+def preview_depth(system: str = "gba") -> float:
+    """Thickness of the preview model relative to its width: official GB/GBC
+    banners are thin cards showing the device's front, NSUI blocks are deep."""
+    try:
+        cbmd = load_template(system)
+    except InjectError:
+        return 0.28
+    screen = cgfx.decode_texture(cbmd.common, cgfx.textures(cbmd.common)[SCREEN_TEXTURE])
+    return 0.07 if picture_box(screen)[1] == "screen" else 0.28
 
 
 def block_parts(screen: Image.Image, title: str, year: str | None, publisher: str = "",
@@ -443,7 +548,9 @@ def block_parts(screen: Image.Image, title: str, year: str | None, publisher: st
     screen_tex = cgfx.decode_texture(cbmd.common, cgfx.textures(cbmd.common)[SCREEN_TEXTURE])
     face = compose_screen(screen_tex, screen, system)
     box, kind = picture_box(screen_tex)
-    if kind == "framed":
+    if kind == "screen":
+        face = face.crop(_face_around(face, box))
+    elif kind == "framed":
         face = face.crop(face.getchannel("A").getbbox())
     elif kind == "boxed":
         face = face.crop(box)

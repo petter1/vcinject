@@ -200,18 +200,20 @@ class ThreeDsPreview(QWidget):
         self.icon: QImage | None = None
         self.top_screen: QImage | None = None
         self.block: tuple[QImage, QImage, QColor] | None = None  # face, plate, side colour
+        self.depth = 0.28  # block thickness relative to its width
         self.angle = 0.0
         self._spin = QTimer(self, interval=33, timeout=self._tick)
         self.title = ""
         self.setFixedSize(self.TOP.width() + 8, self.TOP.height() + self.BOTTOM.height() + self.GAP + 8)
 
     def update_art(self, icon: Image.Image, banner: Image.Image | None, title: str,
-                   top_screen: Image.Image | None = None, block=None):
+                   top_screen: Image.Image | None = None, block=None, depth: float = 0.28):
         # Show the icon exactly as it will be encoded (48x48 RGB565).
         self.icon = to_qimage(smdh.fit_square(icon, 48))
         self.banner = to_qimage(art.letterbox(banner).convert("RGBA")) if banner else None
         self.top_screen = to_qimage(top_screen) if top_screen is not None else None
         self.block = None
+        self.depth = depth
         if block is not None:
             face, plate, side = block
             self.block = (to_qimage(face), to_qimage(plate), QColor(*side))
@@ -236,7 +238,7 @@ class ThreeDsPreview(QWidget):
 
         face, plate, side = self.block
         fw, fh = face.width() * 1.15, face.height() * 1.15
-        thickness = fw * 0.28
+        thickness = fw * self.depth
         r = thickness * 0.45  # radius of the rounded edge profile
         focal = 420.0
         center = QPointF(top.center().x(), top.top() + 34 + fh / 2)
@@ -899,6 +901,10 @@ class MainWindow(QMainWindow):
         self.drop.release.setText("Looking up release…")
         self.drop.set_cover(None, system.key.upper())
         self.title_edit.setText(path.stem)
+        # values of the previous ROM must not leak into this one
+        self.released_edit.clear()
+        self.long_title_edit.clear()
+        self.publisher_edit.setText("Virtual Console")
         title_id = default_title_id(rom)
         self.title_id_edit.setText(f"{title_id:016X}")
         self.product_code_edit.setText(default_product_code(rom, system, title_id))
@@ -928,7 +934,7 @@ class MainWindow(QMainWindow):
         self.found = result
         if result.match:
             self.drop.release.setText(f"✓ {result.match.name}")
-            if self.title_edit.text() == self.rom_path.stem:
+            if self.title_edit.text() == self.rom_path.stem[:self.title_edit.maxLength()]:
                 self.title_edit.setText(_display_title(result.match.name))
             self.art_status.setText(f"Matched by {result.match.method}; "
                                     f"{len(result.images)} images from the libretro database.")
@@ -994,7 +1000,7 @@ class MainWindow(QMainWindow):
                 block = vcbanner.block_parts(self.banner_screen, title, year, publisher, lang, system)
             except Exception as exc:  # never leave a stale preview behind
                 self.art_status.setText(f"Preview failed: {exc}")
-            self.preview.update_art(icon, None, title, None, block)
+            self.preview.update_art(icon, None, title, None, block, vcbanner.preview_depth(system))
             return
         self.banner_image = self._render(
             self.banner_picker, lambda st, found, t: artwork.render_banner(st, found, t, self.system.name))

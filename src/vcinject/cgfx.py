@@ -332,9 +332,41 @@ def recolor_etc1(cgfx: bytes, tex: TextureInfo, transform) -> bytes:
     return bytes(out)
 
 
+FMT_L8, FMT_A8, FMT_LA4, FMT_L4, FMT_A4 = 7, 8, 9, 10, 11
+
+
+def _decode_small(cgfx: bytes, tex: TextureInfo) -> Image.Image:
+    """8 and 4 bit luminance / alpha formats (read-only)."""
+    img = Image.new("RGBA", (tex.width, tex.height))
+    px = img.load()
+    pos = tex.data_offset
+    nibble = tex.format in (FMT_L4, FMT_A4)
+    index = 0
+    for ty in range(0, tex.height, 8):
+        for tx in range(0, tex.width, 8):
+            for x, y in _MORTON:
+                if nibble:
+                    byte = cgfx[pos + index // 2]
+                    v = ((byte >> 4) if index & 1 else (byte & 0xF)) * 17
+                else:
+                    v = cgfx[pos + index]
+                index += 1
+                if tex.format in (FMT_L8, FMT_L4):
+                    color = (v, v, v, 255)
+                elif tex.format in (FMT_A8, FMT_A4):
+                    color = (255, 255, 255, v)
+                else:  # LA4: high nibble luminance, low nibble alpha
+                    lum, alpha = (v >> 4) * 17, (v & 0xF) * 17
+                    color = (lum, lum, lum, alpha)
+                px[tx + x, ty + y] = color
+    return img
+
+
 def decode_texture(cgfx: bytes, tex: TextureInfo) -> Image.Image:
     if tex.format in (FMT_ETC1, FMT_ETC1A4):
         return decode_etc1(cgfx, tex).convert("RGBA")
+    if tex.format in (FMT_L8, FMT_A8, FMT_LA4, FMT_L4, FMT_A4):
+        return _decode_small(cgfx, tex)
     bpp = _BYTES_PER_PIXEL.get(tex.format)
     if bpp is None:
         raise InjectError(f"Unsupported texture format {tex.format} for {tex.name}.")

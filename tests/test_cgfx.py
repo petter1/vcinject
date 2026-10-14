@@ -164,3 +164,27 @@ def test_boot_sound_is_a_valid_wav(tmp_path):
     art.write_game_boy_boot_sound(tmp_path / "boot.wav")
     with wave.open(str(tmp_path / "boot.wav")) as wav:
         assert wav.getnchannels() == 1 and 0.7 < wav.getnframes() / wav.getframerate() < 1.0
+
+
+def device_face():
+    """Like official GB banners: a face with a bright display in a darker bezel,
+    plus a separate strip below, divided by transparent rows."""
+    tex = Image.new("RGBA", (128, 128), (0, 0, 0, 0))
+    d = ImageDraw.Draw(tex)
+    d.rounded_rectangle((2, 3, 125, 98), radius=6, fill=(110, 105, 120, 255))
+    d.rectangle((23, 14, 104, 86), fill=(0, 0, 0, 255))          # display edge
+    d.rectangle((24, 15, 103, 85), fill=(200, 200, 150, 255))    # display
+    d.rectangle((40, 30, 90, 40), fill=(60, 60, 40, 255))        # dark logo in the picture
+    d.rectangle((0, 104, 127, 127), fill=(200, 190, 170, 255))   # "Nintendo GAME BOY" strip
+    return tex
+
+
+def test_device_screen_is_found_and_tinted():
+    tex = device_face()
+    box, kind = vcbanner.picture_box(tex)
+    assert kind == "screen" and box == (24, 15, 104, 86)
+    out = vcbanner.compose_screen(tex, Image.new("RGB", (160, 144), (255, 255, 255)), "gb")
+    r, g, b, _ = out.getpixel((64, 50))
+    assert (r, g, b) != (255, 255, 255) and b < r          # white became the display's tint
+    assert out.getpixel((10, 50)) == tex.getpixel((10, 50))  # bezel untouched
+    assert vcbanner._face_around(tex, box)[3] <= 100        # strip below is a separate face
