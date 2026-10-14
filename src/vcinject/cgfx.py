@@ -244,7 +244,97 @@ def _decode_pixel(fmt: int, raw: bytes) -> tuple[int, int, int, int]:
     return raw[3], raw[2], raw[1], raw[0]
 
 
+# --- ETC1 (PICA200: 4x4 blocks in Morton order inside 8x8 tiles, little endian) ----
+
+FMT_ETC1, FMT_ETC1A4 = 12, 13
+_ETC1_TABLES = ((2, 8), (5, 17), (9, 29), (13, 42), (18, 60), (24, 80), (33, 106), (47, 183))
+_BLOCK_ORDER = ((0, 0), (4, 0), (0, 4), (4, 4))
+
+
+def _clamp(v: int) -> int:
+    return 0 if v < 0 else 255 if v > 255 else v
+
+
+def _etc1_block_colors(word: int) -> tuple[tuple, tuple, bool, int, int, int]:
+    """Base colours (8 bit) of both sub-blocks, flip bit and both table indexes."""
+    hi = word >> 32
+    flip = bool(hi & 1)
+    diff = bool(hi & 2)
+    t1, t2 = (hi >> 5) & 7, (hi >> 2) & 7
+    if diff:
+        def five(shift):
+            base = (hi >> (shift + 3)) & 0x1F
+            delta = (hi >> shift) & 7
+            delta = delta - 8 if delta & 4 else delta
+            return base, base + delta
+        r = five(24)
+        g = five(16)
+        b = five(8)
+        c1 = tuple((v << 3) | (v >> 2) for v in (r[0], g[0], b[0]))
+        c2 = tuple(((v & 0x1F) << 3) | ((v & 0x1F) >> 2) for v in (r[1], g[1], b[1]))
+    else:
+        c1 = tuple(((hi >> sh) & 0xF) * 17 for sh in (28, 20, 12))
+        c2 = tuple(((hi >> sh) & 0xF) * 17 for sh in (24, 16, 8))
+    return c1, c2, flip, t1, t2, diff
+
+
+def _etc1_decode_block(word: int) -> list[tuple[int, int, int]]:
+    c1, c2, flip, t1, t2, _diff = _etc1_block_colors(word)
+    lo = word & 0xFFFFFFFF
+    pixels = []
+    for y in range(4):
+        for x in range(4):
+            i = x * 4 + y
+            msb, lsb = (lo >> (16 + i)) & 1, (lo >> i) & 1
+            second = (y >= 2) if flip else (x >= 2)
+            base, table = (c2, t2) if second else (c1, t1)
+            small, large = _ETC1_TABLES[table]
+            mod = (small, large, -small, -large)[(msb << 1) | lsb]
+            pixels.append(tuple(_clamp(c + mod) for c in base))
+    return pixels
+
+
+def _etc1_words(cgfx: bytes, tex: TextureInfo):
+    alpha = tex.format == FMT_ETC1A4
+    pos = tex.data_offset
+    for ty in range(0, tex.height, 8):
+        for tx in range(0, tex.width, 8):
+            for bx, by in _BLOCK_ORDER:
+                if alpha:
+                    pos += 8
+                yield tx + bx, ty + by, pos, struct.unpack_from("<Q", cgfx, pos)[0]
+                pos += 8
+
+
+def decode_etc1(cgfx: bytes, tex: TextureInfo) -> Image.Image:
+    img = Image.new("RGB", (tex.width, tex.height))
+    px = img.load()
+    for x0, y0, _pos, word in _etc1_words(cgfx, tex):
+        for i, color in enumerate(_etc1_decode_block(word)):
+            px[x0 + i % 4, y0 + i // 4] = color
+    return img
+
+
+def recolor_etc1(cgfx: bytes, tex: TextureInfo, transform) -> bytes:
+    """Apply ``transform(rgb) -> rgb`` to the base colours of every ETC1 block.
+
+    The per-pixel luminance modifiers stay untouched, so shading and detail of
+    the texture survive; blocks are re-encoded in individual (4 bit) mode.
+    """
+    out = bytearray(cgfx)
+    for _x, _y, pos, word in _etc1_words(cgfx, tex):
+        c1, c2, flip, t1, t2, _diff = _etc1_block_colors(word)
+        n1 = [round(_clamp(v) / 17) for v in transform(c1)]
+        n2 = [round(_clamp(v) / 17) for v in transform(c2)]
+        hi = (n1[0] << 28 | n2[0] << 24 | n1[1] << 20 | n2[1] << 16 | n1[2] << 12 | n2[2] << 8
+              | t1 << 5 | t2 << 2 | int(flip))
+        struct.pack_into("<Q", out, pos, (hi << 32) | (word & 0xFFFFFFFF))
+    return bytes(out)
+
+
 def decode_texture(cgfx: bytes, tex: TextureInfo) -> Image.Image:
+    if tex.format in (FMT_ETC1, FMT_ETC1A4):
+        return decode_etc1(cgfx, tex).convert("RGBA")
     bpp = _BYTES_PER_PIXEL.get(tex.format)
     if bpp is None:
         raise InjectError(f"Unsupported texture format {tex.format} for {tex.name}.")

@@ -163,6 +163,12 @@ Banners made for one region get plates for all other languages too, so they
 show up on every console. The icon gets the bevelled VC frame
 (`--no-icon-frame` to disable).
 
+No Game Boy template yet? `vcinject setup --derive-looks` (GUI: the button in
+the artwork card) creates Game Boy and Game Boy Color looks from the GBA look:
+grey (GB) and dark (GBC) cartridges, the game pillarboxed in its native 10:9
+aspect, and the Game Boy start-up "ping" as jingle. Installing an official GB
+VC title as template later replaces them.
+
 Known template layouts: the picture in a rounded frame on a transparent
 texture (newer NSUI GBA banners), in a box of an otherwise black texture
 (official Nintendo VC), or covering the whole texture (NSUI v28).

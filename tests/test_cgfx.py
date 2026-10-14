@@ -1,4 +1,5 @@
 import os
+import struct
 
 from PIL import Image, ImageDraw
 
@@ -129,3 +130,37 @@ def test_plate_handles_one_word_and_very_long_titles():
                   "A very long title with many words that will never fit on one line at all"):
         out = vcbanner.render_plate(plate, title, "Released: 2003")
         assert out.size == plate.size
+
+
+def _etc1_tex(words):
+    blob = b"".join(struct.pack("<Q", w) for w in words)
+    return blob, cgfx.TextureInfo("C3", 8, 8, cgfx.FMT_ETC1, 0, len(blob))
+
+
+def test_etc1_decode_and_recolor_keep_shading():
+    # individual mode: base colours 0x8/0x4, tables 2/5, modifiers vary per pixel
+    hi = (0x8 << 28 | 0x4 << 24 | 0x8 << 20 | 0x4 << 16 | 0x8 << 12 | 0x4 << 8 | 2 << 5 | 5 << 2)
+    word = (hi << 32) | 0x0F0F_3C3C
+    blob, tex = _etc1_tex([word] * 4)
+    img = cgfx.decode_texture(blob, tex)
+    assert img.size == (8, 8)
+    assert cgfx.recolor_etc1(blob, tex, lambda c: c) == blob          # identity keeps the block
+    red = cgfx.decode_texture(cgfx.recolor_etc1(blob, tex, lambda c: (c[0], 0, 0)), tex)
+    assert all(px[1] == px[2] for px in red.getdata())                 # green/blue now equal
+    assert len({px for px in red.getdata()}) > 1                       # shading survived
+
+
+def test_game_boy_screen_is_pillarboxed_in_a_gba_frame():
+    tex = framed_screen()
+    out = vcbanner.compose_screen(tex, Image.new("RGB", (160, 144), (255, 255, 255)), "gb")
+    assert out.getpixel((8, 64))[:3] == (0, 0, 0)        # bar at the left
+    assert out.getpixel((64, 64))[:3] == (255, 255, 255)  # game in the middle
+
+
+def test_boot_sound_is_a_valid_wav(tmp_path):
+    import wave
+
+    from vcinject import art
+    art.write_game_boy_boot_sound(tmp_path / "boot.wav")
+    with wave.open(str(tmp_path / "boot.wav")) as wav:
+        assert wav.getnchannels() == 1 and 0.7 < wav.getnframes() / wav.getframerate() < 1.0

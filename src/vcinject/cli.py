@@ -91,6 +91,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--banner-donor", type=Path, nargs="+", metavar="TITLE",
                    help="VC Console Look: use the 3D banner of VC titles or injects you own "
                         "(.cia/.cxi/banner.bin), one per console; the console is detected")
+    s.add_argument("--derive-looks", action="store_true",
+                   help="create Game Boy / Color looks from the GBA look (recoloured shell, "
+                        "Game Boy start-up sound) until you have official GB VC templates")
     s.add_argument("--banner-system", choices=sorted(systems.SYSTEMS),
                    help="console for --banner-donor when it can't be detected")
     s.add_argument("--forwarder-donor", type=Path, nargs="+", metavar="INJECT",
@@ -157,6 +160,12 @@ def cmd_setup(args: argparse.Namespace) -> int:
         for donor in args.forwarder_donor:
             t = forwarder.install_from(donor)
             print(f"{systems.FORWARDER_KINDS[t.kind]} template installed from {donor.name}")
+    if args.derive_looks:
+        for target in ("gb", "gbc"):
+            vcbanner.derive_look(target)
+            print(f"VC Console Look for {systems.SYSTEMS[target].name} created from the GBA look")
+        if not (args.donor or args.banner_donor or args.forwarder_donor):
+            return 0
     for donor in args.banner_donor or []:
         system, _path = vcbanner.install_from(donor, args.banner_system)
         print(f"VC Console Look for {systems.SYSTEMS[system].name} installed from {donor.name}")

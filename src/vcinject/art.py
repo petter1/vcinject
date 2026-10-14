@@ -123,3 +123,33 @@ def vc_icon_frame(image: Image.Image) -> Image.Image:
         draw.line([(2, y), (size - 3, y)], fill=(inner, inner + 2, inner))
     icon.paste(fit_square(image, size - 6), (3, 3))
     return icon
+
+
+def write_game_boy_boot_sound(path: Path, rate: int = 32728) -> None:
+    """The Game Boy start-up "ping": pulse channel 1 plays frequency register
+    0x783 (~1049 Hz) briefly, then 0x7C1 (~2080 Hz) fading out (envelope 0xF3)."""
+    import math
+    import struct as _struct
+
+    def tone(freq: float, seconds: float, fade: bool) -> list[int]:
+        out = []
+        steps = int(rate * seconds)
+        period = rate / freq
+        for i in range(steps):
+            # envelope 0xF3: volume 15 -> 0, one step every 3/64 s
+            volume = max(0, 15 - int(i / rate / (3 / 64))) if fade else 15
+            square = 1 if (i % period) < period / 2 else -1
+            out.append(int(square * volume / 15 * 9000))
+        return out
+
+    samples = tone(131072 / (2048 - 0x783), 0.068, False) + tone(131072 / (2048 - 0x7C1), 0.75, True)
+    # soften the hard edges slightly so it doesn't click on the 3DS speakers
+    smooth = [int((samples[i - 1] + 2 * samples[i] + samples[(i + 1) % len(samples)]) / 4)
+              for i in range(len(samples))]
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(rate)
+        wav.writeframes(_struct.pack(f"<{len(smooth)}h", *smooth))
+    del math
+

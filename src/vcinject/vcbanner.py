@@ -329,8 +329,19 @@ def compose_screen(template: Image.Image, source: Image.Image, system: str = "gb
     if kind == "full":
         return screen_image(source, template.size, system)
     left, top, right, bottom = box
-    picture = _crop_aspect(source, _ASPECT.get(system, 4 / 3)).resize(
-        (right - left, bottom - top), Image.LANCZOS)
+    aspect = _ASPECT.get(system, 4 / 3)
+    width, height = right - left, bottom - top
+    game = _crop_aspect(source, aspect)
+    if kind == "framed" and abs(width / height - aspect) > 0.15 * aspect:
+        # e.g. a 10:9 Game Boy screen in the GBA's 3:2 frame: black bars, no stretching
+        picture = Image.new("RGB", (width, height), (0, 0, 0))
+        fit = game.copy()
+        fit.thumbnail((width, height), Image.LANCZOS)
+        if fit.height < height and fit.width < width:
+            fit = game.resize((round(height * aspect), height), Image.LANCZOS)
+        picture.paste(fit, ((width - fit.width) // 2, (height - fit.height) // 2))
+    else:
+        picture = game.resize((width, height), Image.LANCZOS)
     out = template.convert("RGBA").copy()
     mask = None
     if kind == "framed":
@@ -455,3 +466,65 @@ def mockup(screen: Image.Image, title: str, year: str | None, publisher: str = "
     img.alpha_composite(face, (x, y))
     img.alpha_composite(plate, (72, 172))
     return img
+
+
+# --- looks derived from another console's look ---------------------------------------
+
+# Cartridge colours for looks derived from the GBA block.
+DERIVED_COLORS = {"gb": (168, 168, 172), "gbc": (78, 78, 86)}
+
+
+def _recolor(source_ref: tuple[int, int, int], target: tuple[int, int, int]):
+    """Map a colour of the source shell to the target colour, keeping its brightness
+    relative to the reference (max channel, so saturated blues don't wash out)."""
+    reference = max(source_ref) or 1
+
+    def transform(color):
+        scale = max(color[:3]) / reference
+        return tuple(max(0, min(255, round(c * scale))) for c in target)
+    return transform
+
+
+def derive_look(target: str, source: str = "gba",
+                color: tuple[int, int, int] | None = None) -> Path:
+    """Create a look for ``target`` (e.g. Game Boy) from an installed look by
+    recolouring its shell and frame; the jingle becomes the target's start-up
+    sound where known. Returns the installed template path."""
+    from . import tools
+
+    cbmd = load_template(source)
+    color = color or DERIVED_COLORS.get(target, (150, 150, 156))
+    textures = cgfx.textures(cbmd.common)
+    transform = _recolor(body_color(source), color)
+
+    common = cbmd.common
+    for name, tex in textures.items():
+        if tex.format in (cgfx.FMT_ETC1, cgfx.FMT_ETC1A4) and name not in (SCREEN_TEXTURE, PLATE_TEXTURE):
+            common = cgfx.recolor_etc1(common, tex, transform)
+    screen_tex = textures[SCREEN_TEXTURE]
+    screen = cgfx.decode_texture(common, screen_tex)
+    box = frame_content_box(screen)
+    if box is not None:  # recolour the frame around the picture, keep the picture area
+        px = screen.load()
+        for y in range(screen.height):
+            for x in range(screen.width):
+                r, g, b, a = px[x, y]
+                if a and not (box[0] <= x < box[2] and box[1] <= y < box[3]):
+                    px[x, y] = transform((r, g, b)) + (a,)
+        common = cgfx.replace_texture(common, SCREEN_TEXTURE, screen)
+
+    cwav = cbmd.cwav
+    if target in ("gb", "gbc"):
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="vcinject-") as tmp:
+            wav, out = Path(tmp) / "boot.wav", Path(tmp) / "boot.bcwav"
+            from .art import write_game_boy_boot_sound
+            write_game_boy_boot_sound(wav)
+            tools.run_tool("bannertool", "makecwav", "-i", wav, "-o", out)
+            cwav = out.read_bytes()
+
+    target_path = data_dir() / "templates" / "vc_looks" / f"{target}.bin"
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_bytes(cgfx.Cbmd(common, dict(cbmd.regions), cwav).build())
+    return target_path
+

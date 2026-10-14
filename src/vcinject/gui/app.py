@@ -1005,7 +1005,9 @@ class MainWindow(QMainWindow):
     def refresh_status(self):
         need = self._missing_template()
         self.setup_button.setVisible(need is not None)
-        if need == "vclook":
+        if need == "vclook" and self._can_derive():
+            self.setup_button.setText(f"Create VC Console Look for {self.system.name} (from GBA look)")
+        elif need == "vclook":
             self.setup_button.setText(f"Set up VC Console Look for {self.system.name}…")
         elif need:
             self.setup_button.setText(f"Set up {systems.FORWARDER_KINDS[need]} emulator template…")
@@ -1024,9 +1026,22 @@ class MainWindow(QMainWindow):
             return self.system.forwarder
         return None if vcbanner.is_installed(self.system.key) else "vclook"
 
+    def _can_derive(self) -> bool:
+        return self.system.key in vcbanner.DERIVED_COLORS and vcbanner.is_installed("gba")
+
     def _setup_needed(self):
         need = self._missing_template()
-        if need == "vclook":
+        if need == "vclook" and self._can_derive():
+            try:
+                vcbanner.derive_look(self.system.key)
+            except InjectError as exc:
+                QMessageBox.critical(self, "VC Console Look", str(exc))
+                return
+            self.log_view.appendPlainText(
+                f"Created the {self.system.name} VC Console Look from the GBA look. An official "
+                f"{self.system.name} VC title can replace it later (Template…).")
+            self._apply_artwork()
+        elif need == "vclook":
             if self.install_banner_template():
                 self._apply_artwork()
         elif need:
