@@ -322,6 +322,11 @@ def _rom_size(path: Path) -> int:
     return Path(path).stat().st_size
 
 
+def dump_is_bad(rom: LibraryRom) -> bool:
+    """The checksum matches no known good dump (and it is not a known ROM hack)."""
+    return rom.verified in ("mismatch", "unknown") and rom.method != "retrogamesnexus"
+
+
 def verified_label(rom: LibraryRom) -> str:
     """How the dump check reads for people ("" when not checked)."""
     if rom.verified == "good":

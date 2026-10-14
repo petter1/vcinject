@@ -32,6 +32,8 @@ from ..errors import InjectError
 from .qtutil import gui_settings, to_qimage
 
 KEY_ROLE = Qt.UserRole
+GOOD_DUMP = QColor(46, 157, 79)
+BAD_DUMP = QColor(214, 64, 52)
 SCAN_THREAD = "vcinject-library-scan"  # named so tests can wait for it
 
 
@@ -60,6 +62,7 @@ class Entry:
     serial: str = ""
     crc: str = ""
     dump: str = ""
+    dump_state: str = ""           # "good", "bad" (no known dump matches) or ""
 
     @property
     def subtitle(self) -> str:
@@ -172,7 +175,9 @@ class ListView(QListWidget):
         item.setSizeHint(size)
         item.setIcon(self.panel.icon(entry, self.iconSize()))
         grey = self.palette().placeholderText().color()
-        item.setForeground(grey if entry.kind == "missing" else self.palette().text().color())
+        colour = grey if entry.kind == "missing" else BAD_DUMP if entry.dump_state == "bad" \
+            else self.palette().text().color()
+        item.setForeground(colour)
         if entry.in_stack:
             tint = QColor(self.palette().highlight().color())
             tint.setAlpha(28)
@@ -295,6 +300,8 @@ class DetailsView(QTreeWidget):
             item.setText(column, value)
             if entry.kind == "missing":
                 item.setForeground(column, grey)
+        if entry.dump_state:  # the Dump column: green when verified, red when not
+            item.setForeground(7, GOOD_DUMP if entry.dump_state == "good" else BAD_DUMP)
         if entry.kind == "stack":
             font = item.font(0)
             font.setBold(True)
@@ -963,7 +970,8 @@ class LibraryPanel(QFrame):
         if rom.self_dumped:
             details.append("self-dumped")
         dump = library.verified_label(rom)
-        if rom.verified in ("mismatch",):  # only warnings in the list, the rest in tooltip/details
+        bad = library.dump_is_bad(rom)
+        if bad:  # warnings in the list too, the rest only in tooltip and details
             details.append(dump)
         note = self._group_notes.get(index, "")
         if note:
@@ -983,7 +991,8 @@ class LibraryPanel(QFrame):
         return Entry(f"rom:{rom.path}", "rom", rom.title, details, "\n".join(tip), rom.path, rom,
                      system=rom.system.key.upper(), year=rom.year or "", series=series,
                      release=region, folder=rom.folder, size=rom.size, status=" · ".join(status),
-                     serial=rom.serial, crc=rom.crc, dump=dump)
+                     serial=rom.serial, crc=rom.crc, dump=dump,
+                     dump_state="bad" if bad else "good" if rom.verified == "good" else "")
 
     def _missing_entry(self, game: library.CatalogGame) -> Entry:
         details = [game.system.key.upper()] + ([game.year] if game.year else []) \

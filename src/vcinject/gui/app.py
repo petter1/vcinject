@@ -798,7 +798,7 @@ class MainWindow(QMainWindow):
         if self.found and self.found.match and self.found.match.method == "retrogamesnexus":
             rom.method = "retrogamesnexus"
         label = library.verified_label(rom)
-        colour = {"good": "#2e9d4f", "mismatch": "#c0392b"}.get(rom.verified)
+        colour = "#d64034" if library.dump_is_bad(rom) else "#2e9d4f" if rom.verified == "good" else None
         self._dump = f'<span style="color:{colour}">{label}</span>' if colour else label
         self._show_ids()
 
