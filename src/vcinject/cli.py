@@ -104,6 +104,8 @@ def build_parser() -> argparse.ArgumentParser:
     lib = sub.add_parser("library", help="list every ROM in a folder and its sub folders")
     lib.add_argument("folder", type=Path)
     lib.add_argument("--offline", action="store_true", help="don't identify ROMs online")
+    lib.add_argument("--clean-names", action="store_true",
+                     help="rename identified ROMs to their release name (keeps 'selfdumped')")
     lib.add_argument("--zip", action="store_true",
                      help="pack every unzipped ROM into its own .zip (the original is deleted "
                           "after the zip was verified)")
@@ -307,9 +309,26 @@ def cmd_library(args: argparse.Namespace) -> int:
     for rom in roms:
         library.analyze(rom, online=not args.offline, cover=False)
         built = f"built {rom.built[-1].title_id:016X}" if rom.built else ""
-        print(f"{rom.system.key.upper():5} {rom.title[:44]:44} {rom.year or '':4}  "
+        mark = "*" if rom.self_dumped else " "
+        print(f"{rom.system.key.upper():5} {mark}{rom.title[:44]:44} {rom.year or '':4}  "
               f"{rom.folder[:24]:24} {built}")
-    print(f"\n{len(roms)} ROMs, {sum(1 for r in roms if r.built)} built")
+    print(f"\n{len(roms)} ROMs, {sum(1 for r in roms if r.built)} built, "
+          f"{sum(r.self_dumped for r in roms)} self-dumped (*)")
+    for group in library.group_versions(roms):
+        for dupe in library.duplicates(group):
+            state = "bit-identical" if dupe.identical else "NOT bit-identical"
+            print(f"\nDuplicate ({state}): {dupe.name}")
+            for rom in dupe.copies:
+                print(f"  {rom.path}")
+    if args.clean_names:
+        print()
+        for rom, stem in library.clean_names(roms):
+            old = rom.path.name
+            try:
+                library.rename(rom, stem)
+                print(f"renamed {old} -> {rom.path.name}")
+            except InjectError as exc:
+                print(f"skipped: {exc}")
     return 0
 
 

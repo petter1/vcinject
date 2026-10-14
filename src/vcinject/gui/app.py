@@ -6,14 +6,14 @@ import sys
 from pathlib import Path
 
 try:
-    from PySide6.QtCore import (QLocale, QObject, QPointF, QRectF, QSettings, QSize, Qt, QThread,
-                                QTimer, Signal)
-    from PySide6.QtGui import (QColor, QFont, QFontDatabase, QImage, QLinearGradient, QPainter,
+    from PySide6.QtCore import (QFile, QLocale, QObject, QPointF, QRectF, QSettings, QSize, Qt,
+                                QThread, QTimer, QUrl, Signal)
+    from PySide6.QtGui import (QColor, QDesktopServices, QFont, QFontDatabase, QImage, QLinearGradient, QPainter,
                                QPainterPath, QPen, QPixmap, QPolygonF, QTransform)
     from PySide6.QtWidgets import (
         QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QListView, QFormLayout, QFrame,
         QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
-        QMessageBox, QPlainTextEdit, QProgressDialog,
+        QMenu, QMessageBox, QPlainTextEdit, QProgressDialog,
         QPushButton, QSlider, QToolButton, QVBoxLayout, QWidget,
     )
 except ImportError:  # pragma: no cover - reported to the user at startup
@@ -26,6 +26,7 @@ from .. import (__version__, art, artwork, gba, registry, serve, smdh, template,
                 vcbanner)
 import queue
 import threading
+import weakref
 
 from .. import builder, forwarder, health, library, systems
 from ..builder import (GBA_3D, GbaInjectOptions, default_product_code,
@@ -163,11 +164,21 @@ class RomDropZone(QFrame):
         self.details.setWordWrap(True)
         self.release = QLabel(objectName="muted")
         self.release.setWordWrap(True)
+        # several versions of the game in the library (languages, copies): pick one
+        self.versions = QComboBox()
+        self.versions.setToolTip("Other versions of this game in your library")
+        self.versions.setVisible(False)
+        self.duplicates = QPushButton()
+        self.duplicates.setVisible(False)
+        versions = QHBoxLayout()
+        versions.addWidget(self.versions, 1)
+        versions.addWidget(self.duplicates)
         text = QVBoxLayout()
         text.addStretch(1)
         text.addWidget(self.headline)
         text.addWidget(self.details)
         text.addWidget(self.release)
+        text.addLayout(versions)
         text.addStretch(1)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -508,6 +519,8 @@ class LibraryPanel(QFrame):
     rom_chosen = Signal(object)          # Path
     rom_install = Signal(object)         # Path, double-click: build and show the QR code
     open_window = Signal()               # "show the library in its own window"
+    rom_renamed = Signal(object, object)  # old Path, new Path
+    _analysis_done = Signal(int)          # scan generation
     _analyzed = Signal(int, int, object)  # scan generation, index in roms, LibraryRom
     _catalog_ready = Signal(int, object)  # catalog generation, list[CatalogGame]
     _cover_ready = Signal(int, int, object)  # catalog generation, index in missing, PIL image
@@ -528,8 +541,11 @@ class LibraryPanel(QFrame):
              "system": "Sort: System", "folder": "Sort: Folder"}
     COMPILATIONS = "\x00compilations"  # series filter entry for multi-game cartridges
 
+    _panels: "weakref.WeakSet[LibraryPanel]" = weakref.WeakSet()  # main window + library window
+
     def __init__(self, grid: bool = False):
         super().__init__(objectName="card")
+        LibraryPanel._panels.add(self)
         self.grid = grid
         if not grid:
             self.setFixedWidth(300)
@@ -543,6 +559,12 @@ class LibraryPanel(QFrame):
         self._missing: list[library.CatalogGame] = []    # missing games on display
         self._missing_items: list[QListWidgetItem] = []  # same order as _missing
         self._series: dict[str, str] = {}                # title -> series
+        self._group_of: dict[int, list] = {}             # index in roms -> its versions
+        self._hidden_versions: set[int] = set()          # versions folded into another entry
+        self._group_notes: dict[int, str] = {}           # "3 versions · ⚠ duplicate"
+        self._picked: set[Path] = set()                  # versions chosen in the version menu
+        language = QLocale.system().name().split("_")[0]
+        self._prefer = tuple(t for t in (library.LANGUAGE_REGION.get(language), "Europe") if t)
         self._generation = 0
         self._rows: dict[Path, int] = {}                 # path -> index in roms
 
@@ -551,12 +573,16 @@ class LibraryPanel(QFrame):
         refresh = QToolButton(text="↻", clicked=self.rescan, toolTip="Scan again")
         zip_roms = QToolButton(text="Zip", clicked=self.zip_roms,
                                toolTip="Zip all unzipped ROMs (saves space, vcinject reads zips)")
+        names = QToolButton(text="Names", clicked=self.clean_names,
+                            toolTip="Rename identified ROMs to their official release name "
+                                    "(keeps the selfdumped mark)")
         top = QHBoxLayout()
         top.addWidget(title, 1)
         if not grid:
             pop_out = QToolButton(text="⧉", clicked=lambda: self.open_window.emit(),
                                   toolTip="Open the library in its own window")
             top.addWidget(pop_out)
+        top.addWidget(names)
         top.addWidget(zip_roms)
         top.addWidget(refresh)
         top.addWidget(choose)
@@ -637,7 +663,10 @@ class LibraryPanel(QFrame):
         self.list.itemClicked.connect(lambda item: self._open_current())
         self.list.itemDoubleClicked.connect(
             lambda item: item.data(Qt.UserRole) and self.rom_install.emit(item.data(Qt.UserRole)))
-        self.list.setToolTip("Click to open, double-click to build and install via QR")
+        self.list.setToolTip("Click to open, double-click to build and install via QR, "
+                             "right-click for more")
+        self.list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._context_menu)
         self.count = QLabel(objectName="muted")
 
         layout = QVBoxLayout(self)
@@ -670,6 +699,7 @@ class LibraryPanel(QFrame):
         self._analyzed.connect(self._update_row)
         self._catalog_ready.connect(self._show_catalog)
         self._cover_ready.connect(self._set_missing_cover)
+        self._analysis_done.connect(self._after_analysis)
 
         folder = self.settings.value("library/folder", "")
         if folder and Path(folder).is_dir():
@@ -725,6 +755,7 @@ class LibraryPanel(QFrame):
                 except Exception:  # unreadable file etc.: keep it listed as is
                     continue
                 self._analyzed.emit(generation, index, rom)
+            self._analysis_done.emit(generation)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -761,6 +792,135 @@ class LibraryPanel(QFrame):
             QMessageBox.warning(self, "Zip ROMs", "Some ROMs were not zipped:\n\n"
                                 + "\n".join(failed[:12]))
 
+    def _renamed(self, rom: library.LibraryRom, old: Path):
+        index = self._rows.pop(old)
+        self._rows[rom.path] = index
+        if old in self._picked:
+            self._picked.discard(old)
+            self._picked.add(rom.path)
+        self._rom_items[index].setData(Qt.UserRole, rom.path)
+        self._show(self._rom_items[index], rom)
+        self.rom_renamed.emit(old, rom.path)
+        for other in list(LibraryPanel._panels):  # the same folder in the other window
+            if other is not self:
+                other._follow_rename(old, rom.path)
+
+    def _follow_rename(self, old: Path, new: Path):
+        index = self._rows.pop(old, None)
+        if index is None:
+            return
+        rom = self.roms[index]
+        rom.path = new
+        self._rows[new] = index
+        self._rom_items[index].setData(Qt.UserRole, new)
+        self._show(self._rom_items[index], rom)
+        self._regroup_timer.start()
+
+    @classmethod
+    def forget_everywhere(cls, path: Path):
+        """A file was deleted: drop it from every library view."""
+        for panel in list(cls._panels):
+            panel.forget(path)
+
+    def forget(self, path: Path):
+        index = self._rows.get(Path(path))
+        if index is None:
+            return
+        group = [r for r in self._group_of.get(index, []) if r.path != Path(path)]
+        self.roms.pop(index)
+        self.list.takeItem(self.list.row(self._rom_items.pop(index)))
+        self._rows = {rom.path: i for i, rom in enumerate(self.roms)}
+        self._picked.discard(Path(path))
+        self._group_notes = {}
+        self._regroup()
+        for rom in group:  # notes of the remaining versions changed
+            self._show(self._rom_items[self._rows[rom.path]], rom)
+
+    def _rename_all(self, pairs) -> list[str]:
+        failed = []
+        for rom, stem in pairs:
+            old = rom.path
+            try:
+                library.rename(rom, stem)
+            except InjectError as exc:
+                failed.append(str(exc))
+                continue
+            self._renamed(rom, old)
+        self._regroup()
+        return failed
+
+    def clean_names(self):
+        pairs = library.clean_names(self.roms)
+        if not pairs:
+            QMessageBox.information(self, "Clean up file names",
+                                    "All identified ROMs already carry their release name.")
+            return
+        box = QMessageBox(QMessageBox.Question, "Clean up file names",
+                          f"Rename {len(pairs)} ROMs to their official release name?\n\n"
+                          "Only ROMs identified by checksum (or known ROM hacks) are renamed; "
+                          "the \"selfdumped\" mark is kept.",
+                          QMessageBox.Yes | QMessageBox.Cancel, self)
+        box.setDetailedText("\n".join(f"{rom.path.name}\n  → {stem}{rom.path.suffix}"
+                                      for rom, stem in pairs))
+        auto = QCheckBox("Do this automatically after every scan")
+        auto.setChecked(self.settings.value("library/auto_names", False, type=bool))
+        box.setCheckBox(auto)
+        if box.exec() != QMessageBox.Yes:
+            return
+        self.settings.setValue("library/auto_names", auto.isChecked())
+        failed = self._rename_all(pairs)
+        if failed:
+            QMessageBox.warning(self, "Clean up file names", "\n".join(failed[:12]))
+
+    def _after_analysis(self, generation: int):
+        if generation == self._generation and self.settings.value("library/auto_names", False,
+                                                                    type=bool):
+            self._rename_all(library.clean_names(self.roms))
+
+    def toggle_self_dumped(self, path: Path):
+        index = self._rows.get(Path(path))
+        if index is None:
+            return
+        rom = self.roms[index]
+        old = rom.path
+        try:
+            library.set_self_dumped(rom, not rom.self_dumped)
+        except InjectError as exc:
+            QMessageBox.warning(self, "Self-dumped", str(exc))
+            return
+        self._renamed(rom, old)
+        self._regroup()
+
+    def _context_menu(self, pos):
+        item = self.list.itemAt(pos)
+        path = item.data(Qt.UserRole) if item is not None else None
+        index = self._rows.get(path) if path is not None else None
+        if index is None:
+            return
+        rom = self.roms[index]
+        menu = QMenu(self)
+        menu.addAction("Open", lambda: self.rom_chosen.emit(rom.path))
+        menu.addAction("Build and install via QR", lambda: self.rom_install.emit(rom.path))
+        menu.addSeparator()
+        mark = menu.addAction("Self-dumped (from my own cartridge)",
+                              lambda: self.toggle_self_dumped(rom.path))
+        mark.setCheckable(True)
+        mark.setChecked(rom.self_dumped)
+        stem = library.clean_stem(rom)
+        clean = menu.addAction("Rename to release name",
+                               lambda: self._rename_all([(rom, stem)]))
+        clean.setEnabled(bool(stem) and stem != rom.path.stem)
+        if stem and stem != rom.path.stem:
+            clean.setText(f"Rename to “{stem}”")
+        group, _dupes = self.versions(rom.path)
+        if len(group) > 1:
+            menu.addAction(f"Versions and duplicates ({len(group)})…",
+                           lambda: VersionsDialog(self, rom.path).exec())
+        menu.addSeparator()
+        menu.addAction("Show in folder",
+                       lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(rom.path.parent))))
+        menu.exec(self.list.viewport().mapToGlobal(pos))
+
     def refresh_rom(self, path: Path):
         """Re-check one ROM (e.g. after building it) without network access."""
         index = self._rows.get(Path(path))
@@ -772,8 +932,9 @@ class LibraryPanel(QFrame):
 
     # --- display -------------------------------------------------------------
 
-    def _update_row(self, generation: int, index: int, rom: library.LibraryRom):
-        if generation == self._generation and index < len(self._rom_items):
+    def _update_row(self, generation: int, _index: int, rom: library.LibraryRom):
+        index = self._rows.get(rom.path)  # files may have been removed meanwhile
+        if generation == self._generation and index is not None and self.roms[index] is rom:
             self._show(self._rom_items[index], rom)
             self._regroup_timer.start()
             if self.show_missing.isChecked():  # newly identified ROMs change what is owned
@@ -790,10 +951,15 @@ class LibraryPanel(QFrame):
         series = self._series.get(rom.title)
         if series and self.sort.currentData() == "series":
             details.insert(0, series)
+        if rom.self_dumped:
+            details.append("self-dumped")
+        note = self._group_notes.get(self._rows.get(rom.path, -1), "")
+        if note:
+            details.append(note)
         if rom.built:
             details.append(f"✓ built ({rom.built[-1].title_id:016X})")
         if self.grid:
-            item.setText(rom.title + ("\n✓ built" if rom.built else ""))
+            item.setText(rom.title + (f"\n{note}" if note else "") + ("\n✓ built" if rom.built else ""))
         else:
             item.setText(f"{rom.title}\n{' · '.join(details)}")
         tip = [str(rom.path), " · ".join(details)]
@@ -833,6 +999,7 @@ class LibraryPanel(QFrame):
         titles = [rom.title for rom in self.roms] + [g.title for g in self._catalog]
         self._series = library.series(titles)
         self._fill_series_filter()
+        self._group_versions()
         for rom, item in zip(self.roms, self._rom_items):
             item.setData(SORT_ROLE, self._sort_key(rom.title, rom.system.key, rom.year,
                                                    rom.folder, True))
@@ -846,6 +1013,44 @@ class LibraryPanel(QFrame):
         if current is not None:
             self.list.scrollToItem(current)
         self._filter()
+
+    def _group_versions(self):
+        """One entry per game: other versions and copies are folded into it."""
+        self._group_of, self._hidden_versions = {}, set()
+        notes = {}
+        for group in library.group_versions(self.roms):
+            indices = [self._rows[rom.path] for rom in group]
+            for index in indices:
+                self._group_of[index] = group
+            if len(group) < 2:
+                continue
+            primary = self._primary(group)
+            self._hidden_versions |= {i for i in indices if self.roms[i] is not primary}
+            dupes = library.duplicates(group)
+            note = f"{len(group)} versions"
+            if dupes:
+                note += " · ⚠ duplicate" + (" (identical)" if all(d.identical for d in dupes) else "")
+            notes[self._rows[primary.path]] = note
+        changed = {i for i in set(notes) | set(self._group_notes)
+                   if notes.get(i) != self._group_notes.get(i)}
+        self._group_notes = notes
+        for index in changed:
+            self._show(self._rom_items[index], self.roms[index])
+
+    def _primary(self, group: list) -> library.LibraryRom:
+        """The version an entry shows: the one picked last, else the preferred language."""
+        picked = [rom for rom in group if rom.path in self._picked]
+        if picked:
+            return picked[0]
+        return min(group, key=lambda r: (library.preferred_order(r.release or r.path.stem,
+                                                                 self._prefer),
+                                         not r.self_dumped, r.path.name.lower()))
+
+    def versions(self, path: Path) -> tuple[list, list]:
+        """All versions of the game ``path`` belongs to, and duplicates among them."""
+        index = self._rows.get(Path(path))
+        group = self._group_of.get(index, []) if index is not None else []
+        return group, (library.duplicates(group) if len(group) > 1 else [])
 
     def _fill_series_filter(self):
         chosen = self.series_filter.currentData()
@@ -891,8 +1096,9 @@ class LibraryPanel(QFrame):
         text = self.search.text().strip().lower()
         system = self.system_filter.currentData()
         shown = 0
-        for rom, item in zip(self.roms, self._rom_items):
-            visible = (system is None or rom.system.key == system) and self._in_series(rom.title) \
+        for index, (rom, item) in enumerate(zip(self.roms, self._rom_items)):
+            visible = index not in self._hidden_versions \
+                and (system is None or rom.system.key == system) and self._in_series(rom.title) \
                 and (not text or text in rom.title.lower() or text in rom.path.name.lower()
                      or text in rom.folder.lower())
             item.setHidden(not visible)
@@ -1031,6 +1237,10 @@ class LibraryPanel(QFrame):
     def select(self, path: Path):
         """Highlight a ROM opened elsewhere (e.g. dropped) without reopening it."""
         index = self._rows.get(Path(path))
+        if index in self._hidden_versions:
+            self._picked -= {rom.path for rom in self._group_of.get(index, [])}
+            self._picked.add(Path(path))
+            self._regroup()
         if index is not None and self._rom_items[index] is not self.list.currentItem():
             self.list.blockSignals(True)
             self.list.setCurrentItem(self._rom_items[index])
@@ -1038,6 +1248,72 @@ class LibraryPanel(QFrame):
 
     def stop(self):
         self._generation += 1  # ends a running analysis
+
+
+class VersionsDialog(QDialog):
+    """All versions of one game in the library; duplicates can be moved to the trash."""
+
+    def __init__(self, panel: LibraryPanel, path: Path):
+        super().__init__(panel)
+        self.panel = panel
+        self.setWindowTitle("Versions and duplicates")
+        self.setMinimumWidth(620)
+        self.layout_ = QVBoxLayout(self)
+        self.path = Path(path)
+        self.removed: list[Path] = []
+        self._build()
+
+    def _build(self):
+        while self.layout_.count():
+            child = self.layout_.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+        group, dupes = self.panel.versions(self.path)
+        if not group:
+            self.layout_.addWidget(QLabel("No other versions left."))
+            return
+        intro = QLabel(f"<b>{group[0].title}</b>: {len(group)} versions in your library.")
+        intro.setWordWrap(True)
+        self.layout_.addWidget(intro)
+        copy_of = {id(rom): dupe for dupe in dupes for rom in dupe.copies}
+        for dupe in dupes:
+            text = (f"⚠ <b>{dupe.name}</b> is there {len(dupe.copies)} times – "
+                    + ("bit-identical, one copy is enough." if dupe.identical
+                       else "<b>not</b> bit-identical (different dumps or a damaged copy)."))
+            warning = QLabel(text)
+            warning.setWordWrap(True)
+            self.layout_.addWidget(warning)
+        grid = QGridLayout()
+        for row, rom in enumerate(sorted(group, key=lambda r: r.path.name.lower())):
+            name = QLabel(f"{rom.path.name}<br><span style='color:gray'>{rom.path.parent} · "
+                          f"{rom.size / 1024 / 1024:.1f} MiB · SHA-1 {rom.sha1[:10] or '?'}"
+                          + (" · self-dumped" if rom.self_dumped else "")
+                          + (" · duplicate" if id(rom) in copy_of else "") + "</span>")
+            name.setWordWrap(True)
+            name.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            trash = QPushButton("Move to Trash")
+            trash.clicked.connect(lambda _=False, r=rom: self._trash(r))
+            grid.addWidget(name, row, 0)
+            grid.addWidget(trash, row, 1)
+        self.layout_.addLayout(grid)
+        close = QPushButton("Close", clicked=self.accept)
+        self.layout_.addWidget(close, alignment=Qt.AlignRight)
+
+    def _trash(self, rom):
+        answer = QMessageBox.question(self, "Move to Trash", f"Move {rom.path.name} to the trash?")
+        if answer != QMessageBox.Yes:
+            return
+        group = self.panel.versions(self.path)[0]
+        if not QFile.moveToTrash(str(rom.path)):
+            QMessageBox.warning(self, "Move to Trash", f"Could not move {rom.path.name} to the trash.")
+            return
+        LibraryPanel.forget_everywhere(rom.path)
+        self.removed.append(rom.path)
+        if rom.path == self.path:  # the opened file itself: follow another version
+            others = [r for r in group if r.path != rom.path]
+            if others:
+                self.path = others[0].path
+        self._build()
 
 
 class LibraryWindow(QMainWindow):
@@ -1049,6 +1325,7 @@ class LibraryWindow(QMainWindow):
         self.panel = LibraryPanel(grid=True)
         self.panel.rom_chosen.connect(main.load_rom)
         self.panel.rom_install.connect(main.install_from_library)
+        self.panel.rom_renamed.connect(main._rom_renamed)
         self.setCentralWidget(self.panel)
         self.resize(1100, 780)
 
@@ -1223,6 +1500,10 @@ class MainWindow(QMainWindow):
         self.library.rom_chosen.connect(self.load_rom)
         self.library.rom_install.connect(self.install_from_library)
         self.library.open_window.connect(self.open_library_window)
+        self.library.rom_renamed.connect(self._rom_renamed)
+        self.drop.versions.currentIndexChanged.connect(
+            lambda: self.drop.versions.currentData() and self.load_rom(self.drop.versions.currentData()))
+        self.drop.duplicates.clicked.connect(self.show_duplicates)
         self.library_window: LibraryWindow | None = None
         columns = QHBoxLayout()
         columns.setSpacing(16)
@@ -1256,6 +1537,45 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "Select ROM", "", ROM_FILTER)
         if path:
             self.load_rom(Path(path))
+
+    def _show_versions(self, path: Path):
+        group, dupes = self.library.versions(path)
+        combo = self.drop.versions
+        combo.blockSignals(True)
+        combo.clear()
+        copies = {id(rom) for dupe in dupes for rom in dupe.copies}
+        for rom in sorted(group, key=lambda r: (r.release or r.path.name).lower()):
+            label = rom.release or library.plain_stem(rom.path)
+            if rom.self_dumped:
+                label += " · self-dumped"
+            if id(rom) in copies:
+                label += " · ⚠ duplicate"
+            combo.addItem(label, rom.path)
+        combo.setCurrentIndex(max(0, combo.findData(path)))
+        combo.setVisible(len(group) > 1)
+        combo.blockSignals(False)
+        if dupes:
+            identical = all(d.identical for d in dupes)
+            self.drop.duplicates.setText("⚠ Duplicate" + (" (identical)" if identical else "") + "…")
+        self.drop.duplicates.setVisible(bool(dupes))
+
+    def show_duplicates(self):
+        if self.rom_path is None:
+            return
+        dialog = VersionsDialog(self.library, self.rom_path)
+        dialog.exec()
+        if self.rom_path in dialog.removed:  # the open ROM went to the trash
+            self.rom_path = None
+            self.load_rom(dialog.path)
+        elif self.rom_path is not None:
+            self._show_versions(self.rom_path)
+
+    def _rom_renamed(self, old: Path, new: Path):
+        if self.rom_path == old:
+            self.rom_path = new
+            self.drop.headline.setText(new.name)
+            self.output_edit.setText(str(new.with_suffix(".cia")))
+            self._show_versions(new)
 
     def open_library_window(self):
         if self.library_window is None:
@@ -1305,7 +1625,8 @@ class MainWindow(QMainWindow):
                                          else "⚠ no emulator template yet"))
         self.drop.release.setText("Looking up release…")
         self.drop.set_cover(None, system.key.upper())
-        self.title_edit.setText(path.stem)
+        self.title_edit.setText(library.plain_stem(path))
+        self._show_versions(path)
         # values of the previous ROM must not leak into this one
         self.released_edit.clear()
         self.long_title_edit.clear()
@@ -1339,7 +1660,7 @@ class MainWindow(QMainWindow):
         self.found = result
         if result.match:
             self.drop.release.setText(f"✓ {result.match.name}")
-            if self.title_edit.text() == self.rom_path.stem[:self.title_edit.maxLength()]:
+            if self.title_edit.text() == library.plain_stem(self.rom_path)[:self.title_edit.maxLength()]:
                 self.title_edit.setText(_display_title(result.match.name))
             if result.match.method == "retrogamesnexus":
                 self.art_status.setText("Not in the No-Intro database (ROM hack?); box art from "

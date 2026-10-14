@@ -149,6 +149,21 @@ No-Intro database below your ROMs, with a region filter and an
 "owned X of Y" count. Covers of missing games are loaded for what is on screen
 and shown greyed out or in black & white (your choice).
 
+**One entry per game:** language versions and copies of a game are folded
+into one entry ("3 versions"); the version menu under the ROM picks which one
+to build. Copies of the same release are flagged – bit-identical or not – and
+**Versions and duplicates…** (right-click) moves the spare ones to the trash.
+
+**Sort and series:** sort by name, series, release year, system or folder;
+the series menu lists recognised series (e.g. *Pokemon (5/7)* = owned/known)
+and compilations. With missing games shown, *Owned games first* keeps your
+own games on top or mixes them into the order.
+
+**File names:** **Names** renames identified ROMs to their official release
+name – optionally after every scan – and right-click → *Self-dumped* marks a
+ROM as dumped from your own cartridge by adding ` - selfdumped` to its file
+name (the mark is kept when renaming). Zipped ROMs are renamed inside, too.
+
 **⧉** opens the library in its own resizable window as a grid of large covers –
 handy for browsing a big collection; clicking a game there opens it in the main
 window as usual.
@@ -160,6 +175,7 @@ vcinject build "Golden Sun.gba" --qr        # any supported ROM; build and insta
 vcinject build "Mega Man X.sfc" -o mmx.cia  # just build
 vcinject library ~/ROMs                     # list a ROM folder (.zip ROMs included)
 vcinject library ~/ROMs --zip               # pack every ROM into its own .zip
+vcinject library ~/ROMs --clean-names       # rename to release names, report duplicates
 vcinject doctor --fix                       # check and repair the setup
 vcinject setup --banner-donor vc_title.cia  # install a VC Console Look
 vcinject setup --forwarder-donor inject.cia # install an emulator template

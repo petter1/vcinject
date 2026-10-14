@@ -30,10 +30,37 @@ class LibraryRom:
     cover: Image.Image | None = None
     sha1: str = ""
     built: list[registry.Entry] = field(default_factory=list)
+    method: str = ""                       # how release was found: crc, serial, ... retrogamesnexus
+    family: str = ""                       # serial without region letter (GBA "BPE")
 
     @property
     def title(self) -> str:
-        return (self.release or self.path.stem).split(" (", 1)[0]
+        return (self.release or plain_stem(self.path)).split(" (", 1)[0]
+
+    @property
+    def self_dumped(self) -> bool:
+        return is_self_dumped(self.path)
+
+    @property
+    def exact(self) -> bool:
+        """Identified as one specific release (checksum or a known hack), so its
+        file can be named after it."""
+        return bool(self.release) and self.method in ("crc", "retrogamesnexus")
+
+
+# "selfdumped" in a file name marks a ROM dumped from one's own cartridge.
+_SELF_DUMPED = re.compile(r"self-?dumped", re.I)
+_SELF_DUMPED_PART = re.compile(r"\s*(?:-\s*)?[\[(]?\s*self-?dumped\s*[\])]?", re.I)
+SELF_DUMPED_SUFFIX = " - selfdumped"
+
+
+def is_self_dumped(path: Path) -> bool:
+    return bool(_SELF_DUMPED.search(Path(path).stem))
+
+
+def plain_stem(path: Path) -> str:
+    """File name without extension and without the "selfdumped" mark."""
+    return _SELF_DUMPED_PART.sub("", Path(path).stem).strip() or Path(path).stem
 
 
 def scan(root: Path) -> list[LibraryRom]:
@@ -71,13 +98,16 @@ def analyze(rom: LibraryRom, online: bool = True, cover: bool = True) -> Library
         game_code = data[0xAC:0xB0].decode("ascii", "replace") if rom.system.key == "gba" else ""
         match = db.identify(rom.system.strip_header(data), game_code, systems.rom_name(rom.path))
         if match and artwork.is_probably_hack(match, systems.rom_name(rom.path)):
-            game, hack_cover = artwork.nexus_cover([Path(systems.rom_name(rom.path)).stem],
+            game, hack_cover = artwork.nexus_cover([plain_stem(systems.rom_name(rom.path))],
                                                    rom.system.database)
             if game:
                 match = None
                 rom.release, rom.year, rom.cover = game.name, game.year, hack_cover
+                rom.method = "retrogamesnexus"
         if match:
-            rom.release = match.name
+            rom.release, rom.method = match.name, match.method
+            families = sorted(s[:3] for s in db.serials.get(match.name, ()) if len(s) == 4)
+            rom.family = families[0] if families else ""
             crcs = db.sibling_crcs(match.name)
             rom.year = artwork._metadata("releaseyear", crcs, rom.system.database)
             if cover:
@@ -87,10 +117,10 @@ def analyze(rom: LibraryRom, online: bool = True, cover: bool = True) -> Library
                         break
         if cover and rom.cover is None and not (rom.release and not match):  # hacks: RetroGamesNexus
             game, rom.cover = artwork.nexus_cover(
-                [match.name if match else None, Path(systems.rom_name(rom.path)).stem],
+                [match.name if match else None, plain_stem(systems.rom_name(rom.path))],
                 rom.system.database)
             if game and not match:
-                rom.release, rom.year = game.name, game.year
+                rom.release, rom.year, rom.method = game.name, game.year, "retrogamesnexus"
         if rom.cover is not None:
             rom.cover.thumbnail((128, 128))
     except InjectError:
@@ -277,3 +307,123 @@ def series(titles: list[str]) -> dict[str, str]:
         if chosen:
             result[title] = display.get(chosen) or " ".join(chosen).title()
     return result
+
+
+# --- versions, duplicates and file names ----------------------------------------------
+
+def group_versions(roms: list[LibraryRom]) -> list[list[LibraryRom]]:
+    """ROMs of the same game together: copies, language and regional versions
+    (same serial apart from the region letter, or the same title without tags)."""
+    parent = list(range(len(roms)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    first: dict[tuple, int] = {}
+    for i, rom in enumerate(roms):
+        keys = [(rom.system.key, "title", artwork._normalize(rom.release or plain_stem(rom.path)))]
+        if rom.family:
+            keys.append((rom.system.key, "serial", rom.family))
+        if rom.sha1:
+            keys.append(("sha1", rom.sha1))
+        for key in keys:
+            if key in first:
+                parent[find(i)] = find(first[key])
+            else:
+                first[key] = i
+    groups: dict[int, list[LibraryRom]] = {}
+    for i, rom in enumerate(roms):
+        groups.setdefault(find(i), []).append(rom)
+    return list(groups.values())
+
+
+@dataclass
+class Duplicate:
+    copies: list[LibraryRom]   # the same release more than once
+    identical: bool            # all bit-identical (after unpacking zips)
+
+    @property
+    def name(self) -> str:
+        return self.copies[0].release or plain_stem(self.copies[0].path)
+
+
+def duplicates(group: list[LibraryRom]) -> list[Duplicate]:
+    """Copies of the same release (or the very same data) within one game."""
+    by_release: dict[str, list[LibraryRom]] = {}
+    for rom in group:
+        key = f"sha1:{rom.sha1}" if rom.sha1 else f"name:{plain_stem(rom.path).lower()}"
+        if rom.release and rom.method == "crc":
+            key = f"release:{rom.release}"
+        by_release.setdefault(key, []).append(rom)
+    found = []
+    for copies in by_release.values():
+        if len(copies) > 1:
+            hashes = {c.sha1 for c in copies}
+            found.append(Duplicate(copies, len(hashes) == 1 and "" not in hashes))
+    return found
+
+
+_UNSAFE_NAME = re.compile(r'[\\/:*?"<>|]')
+
+
+def clean_stem(rom: LibraryRom, self_dumped: bool | None = None) -> str | None:
+    """The tidy file name (without extension): the release name, plus the
+    "selfdumped" mark when set. None when the ROM is not exactly identified."""
+    if self_dumped is None:
+        self_dumped = rom.self_dumped
+    base = rom.release if rom.exact else None
+    if base is None:
+        if self_dumped == rom.self_dumped:
+            return None
+        base = plain_stem(rom.path)
+    base = _UNSAFE_NAME.sub("_", base).strip(" .")
+    return base + (SELF_DUMPED_SUFFIX if self_dumped else "")
+
+
+def rename(rom: LibraryRom, stem: str) -> Path:
+    """Give ``rom`` the file name ``stem`` (zips: the ROM inside as well)."""
+    path = rom.path
+    target = path.with_name(stem + path.suffix)
+    if target == path:
+        return path
+    if target.exists() and target.name.lower() != path.name.lower():
+        raise InjectError(f"{target.name} already exists; {path.name} was not renamed.")
+    if systems.is_zip(path):
+        inner = systems.rom_name(path)
+        data = systems.read_rom(path)
+        partial = path.with_name(f".{path.name}.part")
+        try:
+            member = stem + Path(inner).suffix
+            with zipfile.ZipFile(partial, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+                zf.writestr(member, data)
+            with zipfile.ZipFile(partial) as zf:
+                if zf.read(member) != data:
+                    raise InjectError(f"Verifying the renamed {path.name} failed.")
+            shutil.copystat(path, partial)
+            partial.replace(path)
+        except (OSError, zipfile.BadZipFile) as exc:
+            raise InjectError(f"Could not rename inside {path.name} ({exc}).") from exc
+        finally:
+            if partial.exists():
+                partial.unlink()
+    path.rename(target)
+    rom.path = target
+    return target
+
+
+def clean_names(roms: list[LibraryRom]) -> list[tuple[LibraryRom, str]]:
+    """ROMs whose file name differs from the tidy one, with that name."""
+    todo = []
+    for rom in roms:
+        stem = clean_stem(rom)
+        if stem and stem != rom.path.stem:
+            todo.append((rom, stem))
+    return todo
+
+
+def set_self_dumped(rom: LibraryRom, flag: bool) -> Path:
+    stem = clean_stem(rom, flag) or (plain_stem(rom.path) + (SELF_DUMPED_SUFFIX if flag else ""))
+    return rename(rom, stem)
