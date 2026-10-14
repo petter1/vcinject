@@ -675,6 +675,9 @@ class MainWindow(QMainWindow):
         except (OSError, InjectError) as exc:
             QMessageBox.warning(self, "Invalid ROM", str(exc))
             return
+        if self.qr_panel.server is not None:  # the served CIA belongs to the previous ROM
+            self.qr_panel.stop()
+            self.log_view.appendPlainText("Stopped serving: a new ROM was loaded.")
         self.rom, self.rom_path, self.system = rom, path, system
         for widget in self._gba_only:
             widget.setVisible(system.key == "gba")
