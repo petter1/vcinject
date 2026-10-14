@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
+import zipfile
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -56,7 +58,7 @@ def scan(root: Path) -> list[LibraryRom]:
 
 def analyze(rom: LibraryRom, online: bool = True, cover: bool = True) -> LibraryRom:
     """Identify the ROM, look up its cover and whether it was built before."""
-    data = rom.path.read_bytes()
+    data = systems.read_rom(rom.path)
     rom.sha1 = hashlib.sha1(data).hexdigest()
     rom.built = sorted((e for e in registry.load().values() if e.rom_sha1 == rom.sha1),
                        key=lambda e: e.built_at)
@@ -65,7 +67,7 @@ def analyze(rom: LibraryRom, online: bool = True, cover: bool = True) -> Library
     try:
         db = artwork.ReleaseDatabase.load(system=rom.system.database)
         game_code = data[0xAC:0xB0].decode("ascii", "replace") if rom.system.key == "gba" else ""
-        match = db.identify(rom.system.strip_header(data), game_code, rom.path.name)
+        match = db.identify(rom.system.strip_header(data), game_code, systems.rom_name(rom.path))
         if match:
             rom.release = match.name
             crcs = db.sibling_crcs(match.name)
@@ -82,7 +84,41 @@ def analyze(rom: LibraryRom, online: bool = True, cover: bool = True) -> Library
 
 
 def crc32(path: Path) -> str:
-    return f"{zlib.crc32(Path(path).read_bytes()) & 0xFFFFFFFF:08X}"
+    return f"{zlib.crc32(systems.read_rom(path)) & 0xFFFFFFFF:08X}"
+
+
+# --- zipping: one ROM per .zip, as No-Intro sets are usually shared -----------------
+
+def unzipped(roms: list[LibraryRom]) -> list[LibraryRom]:
+    return [r for r in roms if not systems.is_zip(r.path)]
+
+
+def zip_rom(path: Path) -> Path:
+    """Pack ``path`` into ``<name>.zip`` next to it and delete the original once
+    the zip has been read back and verified. Returns the zip."""
+    path = Path(path)
+    target = path.with_suffix(".zip")
+    if target.exists():
+        raise InjectError(f"{target.name} already exists; {path.name} was left as it is.")
+    data = path.read_bytes()
+    partial = target.with_name(f".{target.name}.part")
+    try:
+        with zipfile.ZipFile(partial, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+            info = zipfile.ZipInfo.from_file(path, path.name)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            zf.writestr(info, data)
+        with zipfile.ZipFile(partial) as zf:  # never delete a ROM without a good copy
+            if zf.read(path.name) != data:
+                raise InjectError(f"Verifying {target.name} failed.")
+        partial.replace(target)
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise InjectError(f"Could not zip {path.name} ({exc}).") from exc
+    finally:
+        if partial.exists():
+            partial.unlink()
+    shutil.copystat(path, target)
+    path.unlink()
+    return target
 
 
 # --- collection: every game of a system, owned or not ------------------------------

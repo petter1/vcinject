@@ -104,6 +104,9 @@ def build_parser() -> argparse.ArgumentParser:
     lib = sub.add_parser("library", help="list every ROM in a folder and its sub folders")
     lib.add_argument("folder", type=Path)
     lib.add_argument("--offline", action="store_true", help="don't identify ROMs online")
+    lib.add_argument("--zip", action="store_true",
+                     help="pack every unzipped ROM into its own .zip (the original is deleted "
+                          "after the zip was verified)")
     t = sub.add_parser("import-tickets",
                        help="mark all title IDs on your 3DS as taken (ticket.db from GodMode9)")
     t.add_argument("paths", type=Path, nargs="+", help="ticket.db, .tik files or folders")
@@ -287,6 +290,20 @@ def cmd_library(args: argparse.Namespace) -> int:
     if not roms:
         print("No supported ROMs found.")
         return 0
+    if args.zip:
+        todo = library.unzipped(roms)
+        before = sum(r.size for r in todo)
+        after = 0
+        for rom in todo:
+            try:
+                zipped = library.zip_rom(rom.path)
+            except InjectError as exc:
+                print(f"skipped: {exc}")
+                continue
+            after += zipped.stat().st_size
+            print(f"zipped  {zipped.name}")
+        print(f"{len(todo)} ROMs zipped, {(before - after) / 1024 / 1024:.1f} MiB saved\n")
+        roms = library.scan(args.folder)
     for rom in roms:
         library.analyze(rom, online=not args.offline, cover=False)
         built = f"built {rom.built[-1].title_id:016X}" if rom.built else ""

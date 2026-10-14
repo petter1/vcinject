@@ -13,7 +13,7 @@ try:
     from PySide6.QtWidgets import (
         QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QListView, QFormLayout, QFrame,
         QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
-        QMessageBox, QPlainTextEdit,
+        QMessageBox, QPlainTextEdit, QProgressDialog,
         QPushButton, QSlider, QToolButton, QVBoxLayout, QWidget,
     )
 except ImportError:  # pragma: no cover - reported to the user at startup
@@ -532,12 +532,15 @@ class LibraryPanel(QFrame):
         title = QLabel("Library", objectName="cardTitle")
         choose = QPushButton("Folder…", clicked=self.choose_folder)
         refresh = QToolButton(text="↻", clicked=self.rescan, toolTip="Scan again")
+        zip_roms = QToolButton(text="Zip", clicked=self.zip_roms,
+                               toolTip="Zip all unzipped ROMs (saves space, vcinject reads zips)")
         top = QHBoxLayout()
         top.addWidget(title, 1)
         if not grid:
             pop_out = QToolButton(text="⧉", clicked=self.open_window.emit,
                                   toolTip="Open the library in its own window")
             top.addWidget(pop_out)
+        top.addWidget(zip_roms)
         top.addWidget(refresh)
         top.addWidget(choose)
         self.folder_label = QLabel("No folder chosen", objectName="muted")
@@ -676,6 +679,39 @@ class LibraryPanel(QFrame):
                 self._analyzed.emit(generation, row, rom)
 
         threading.Thread(target=work, daemon=True).start()
+
+    def zip_roms(self):
+        todo = library.unzipped(self.roms)
+        if not todo:
+            QMessageBox.information(self, "Zip ROMs", "All ROMs in the library are zipped already.")
+            return
+        size = sum(r.size for r in todo) / 1024 / 1024
+        answer = QMessageBox.question(
+            self, "Zip ROMs",
+            f"Pack {len(todo)} ROMs ({size:.1f} MiB) into one .zip each?\n\n"
+            "Each original is deleted only after its zip was read back and verified. "
+            "Injects built before keep working, vcinject recognises zipped ROMs.")
+        if answer != QMessageBox.Yes:
+            return
+        progress = QProgressDialog("Zipping ROMs…", "Stop", 0, len(todo), self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(300)
+        failed = []
+        for done, rom in enumerate(todo):
+            if progress.wasCanceled():
+                break
+            progress.setLabelText(f"Zipping {rom.path.name}…")
+            progress.setValue(done)
+            QApplication.processEvents()
+            try:
+                library.zip_rom(rom.path)
+            except InjectError as exc:
+                failed.append(str(exc))
+        progress.setValue(len(todo))
+        self.rescan()
+        if failed:
+            QMessageBox.warning(self, "Zip ROMs", "Some ROMs were not zipped:\n\n"
+                                + "\n".join(failed[:12]))
 
     def refresh_rom(self, path: Path):
         """Re-check one ROM (e.g. after building it) without network access."""
@@ -1168,7 +1204,7 @@ class MainWindow(QMainWindow):
         self._lookup_id += 1
         lookup_id, rom, path, system = self._lookup_id, self.rom, self.rom_path, self.system
         Task(self, lambda _log: artwork.lookup(system.strip_header(rom.data), rom.game_code,
-                                               path.name, system=system.database),
+                                               systems.rom_name(path), system=system.database),
              lambda result, error: self._artwork_found(lookup_id, result, error))
 
     def _artwork_found(self, lookup_id: int, result, error: str):

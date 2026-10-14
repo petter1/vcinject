@@ -36,7 +36,7 @@ class PlainRom:
 
 def load_rom(path: Path) -> tuple[systems.System, "gba.GbaRom | PlainRom"]:
     system = systems.for_rom(path)
-    data = Path(path).read_bytes()
+    data = systems.read_rom(path)
     if system.key == "gba":
         return system, gba.GbaRom.parse(data)
     if not data:
@@ -235,7 +235,7 @@ def build_forwarder(options: GbaInjectOptions, log: Log = print) -> BuildResult:
     if c.system.forwarder is None:
         raise InjectError(f"{c.system.name} ROMs are not built as forwarders.")
     template = forwarder.ForwarderTemplate.load(c.system.forwarder)
-    exheader, romfs_image, internal = template.build(c.rom.data, c.rom_path.suffix, c.title_id,
+    exheader, romfs_image, internal = template.build(c.rom.data, Path(systems.rom_name(c.rom_path)).suffix, c.title_id,
                                                      c.title)
     log(f"Emulator:     {systems.FORWARDER_KINDS[template.kind]} forwarder")
     log(f"Save folder:  sdmc:/nsui_formwarders_data/{internal}")
@@ -269,7 +269,7 @@ def _resolve_artwork(options: GbaInjectOptions, c: _Common,
         log("Looking up artwork...")
         try:
             found = artwork.lookup(c.system.strip_header(c.rom.data), c.rom.game_code,
-                                   c.rom_path.name, system=c.system.database)
+                                   systems.rom_name(c.rom_path), system=c.system.database)
         except InjectError as exc:
             log(f"Warning:      artwork lookup failed, using generated art ({exc})")
         if found.match:
