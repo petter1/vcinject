@@ -11,7 +11,7 @@ try:
     from PySide6.QtGui import (QColor, QFont, QFontDatabase, QImage, QLinearGradient, QPainter,
                                QPainterPath, QPen, QPixmap, QPolygonF, QTransform)
     from PySide6.QtWidgets import (
-        QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame,
+        QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QListView, QFormLayout, QFrame,
         QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
         QMessageBox, QPlainTextEdit,
         QPushButton, QSlider, QToolButton, QVBoxLayout, QWidget,
@@ -24,6 +24,7 @@ from PIL import Image
 
 from .. import (__version__, art, artwork, gba, registry, serve, smdh, template, tickets, tools,
                 vcbanner)
+import queue
 import threading
 
 from .. import builder, forwarder, health, library, systems
@@ -68,6 +69,14 @@ QToolButton#disclosure { border: none; font-weight: 600; }
 
 
 # --- helpers -------------------------------------------------------------------
+
+def gui_settings() -> QSettings:
+    """GUI preferences. With VCINJECT_DATA_DIR set (tests, portable use) they live in
+    that folder instead of the user's system-wide preferences."""
+    if os.environ.get("VCINJECT_DATA_DIR"):
+        return QSettings(str(Path(os.environ["VCINJECT_DATA_DIR"]) / "gui.ini"), QSettings.IniFormat)
+    return QSettings("vcinject", "vcinject")
+
 
 def to_qimage(image: Image.Image) -> QImage:
     rgba = image.convert("RGBA")
@@ -488,8 +497,10 @@ class LibraryPanel(QFrame):
     """ROM folder (incl. sub folders) as a clickable list with covers."""
     rom_chosen = Signal(object)          # Path
     rom_install = Signal(object)         # Path, double-click: build and show the QR code
+    open_window = Signal()               # "show the library in its own window"
     _analyzed = Signal(int, int, object)  # scan generation, row, LibraryRom
     _catalog_ready = Signal(int, object)  # catalog generation, list[CatalogGame]
+    _cover_ready = Signal(int, int, object)  # catalog generation, row, PIL image
 
     REGIONS = {
         "Europe": ("Europe", "Germany", "France", "Spain", "Italy", "UK", "World", "Netherlands",
@@ -500,11 +511,20 @@ class LibraryPanel(QFrame):
     }
 
     ICON = QSize(40, 48)
+    GRID_ICON = QSize(110, 140)
+    GRID_CELL = QSize(160, 200)
+    MISSING_STYLES = {"greyed": "Missing: greyed out", "bw": "Missing: black & white"}
 
-    def __init__(self):
+    def __init__(self, grid: bool = False):
         super().__init__(objectName="card")
-        self.setFixedWidth(300)
-        self.settings = QSettings("vcinject", "vcinject")
+        self.grid = grid
+        if not grid:
+            self.setFixedWidth(300)
+        self.settings = gui_settings()
+        self._missing_covers: dict[int, Image.Image] = {}   # catalog row -> cover
+        self._cover_queue: queue.Queue = queue.Queue()
+        self._cover_requested: set[int] = set()
+        threading.Thread(target=self._cover_worker, daemon=True).start()
         self.roms: list[library.LibraryRom] = []
         self._generation = 0
         self._rows: dict[Path, int] = {}
@@ -514,6 +534,10 @@ class LibraryPanel(QFrame):
         refresh = QToolButton(text="↻", clicked=self.rescan, toolTip="Scan again")
         top = QHBoxLayout()
         top.addWidget(title, 1)
+        if not grid:
+            pop_out = QToolButton(text="⧉", clicked=self.open_window.emit,
+                                  toolTip="Open the library in its own window")
+            top.addWidget(pop_out)
         top.addWidget(refresh)
         top.addWidget(choose)
         self.folder_label = QLabel("No folder chosen", objectName="muted")
@@ -537,14 +561,36 @@ class LibraryPanel(QFrame):
         self.show_missing.toggled.connect(self.region.setVisible)
         self.show_missing.toggled.connect(lambda: self._catalog_timer.start())
         self.region.currentIndexChanged.connect(lambda: self._catalog_timer.start())
+        self.missing_style = QComboBox()
+        for key, label in self.MISSING_STYLES.items():
+            self.missing_style.addItem(label, key)
+        self.missing_style.setCurrentIndex(max(0, self.missing_style.findData(
+            self.settings.value("library/missing_style", "greyed"))))
+        self.missing_style.setVisible(False)
+        self.show_missing.toggled.connect(self.missing_style.setVisible)
+        self.missing_style.currentIndexChanged.connect(self._missing_style_changed)
         self._catalog_timer = QTimer(self, singleShot=True, interval=600,
                                      timeout=self._refresh_catalog)
         self._catalog: list[library.CatalogGame] = []
         self._catalog_generation = 0
         self.list = QListWidget()
-        self.list.setIconSize(self.ICON)
-        self.list.setSpacing(2)
-        self.list.setUniformItemSizes(True)
+        if grid:  # big covers in a grid that reflows with the window width
+            self.list.setViewMode(QListView.IconMode)
+            self.list.setIconSize(self.GRID_ICON)
+            self.list.setGridSize(self.GRID_CELL)
+            self.list.setResizeMode(QListView.Adjust)
+            self.list.setMovement(QListView.Static)
+            self.list.setWordWrap(True)
+            self.list.setTextElideMode(Qt.ElideRight)
+            self.list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        else:
+            self.list.setIconSize(self.ICON)
+            self.list.setSpacing(2)
+            self.list.setUniformItemSizes(True)
+        # covers of missing games are fetched for what is on screen only
+        self._visible_timer = QTimer(self, singleShot=True, interval=200,
+                                     timeout=self._request_visible_covers)
+        self.list.verticalScrollBar().valueChanged.connect(lambda: self._visible_timer.start())
         # Any change of the current item (mouse or arrow keys) opens the ROM; a short
         # delay keeps fast scrolling through the list smooth.
         self._open_timer = QTimer(self, singleShot=True, interval=150, timeout=self._open_current)
@@ -559,14 +605,24 @@ class LibraryPanel(QFrame):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.addLayout(top)
         layout.addWidget(self.folder_label)
-        layout.addWidget(self.search)
-        layout.addWidget(self.system_filter)
-        layout.addWidget(self.show_missing)
-        layout.addWidget(self.region)
+        if not grid:
+            layout.addWidget(self.search)
+            layout.addWidget(self.system_filter)
+        if grid:  # filters in one row above the grid
+            filters = QHBoxLayout()
+            for widget in (self.search, self.system_filter, self.show_missing, self.region,
+                           self.missing_style):
+                filters.addWidget(widget)
+            layout.addLayout(filters)
+        else:
+            layout.addWidget(self.show_missing)
+            layout.addWidget(self.region)
+            layout.addWidget(self.missing_style)
         layout.addWidget(self.list, 1)
         layout.addWidget(self.count)
         self._analyzed.connect(self._update_row)
         self._catalog_ready.connect(self._show_catalog)
+        self._cover_ready.connect(self._set_missing_cover)
 
         folder = self.settings.value("library/folder", "")
         if folder and Path(folder).is_dir():
@@ -601,7 +657,7 @@ class LibraryPanel(QFrame):
         for row, rom in enumerate(self.roms):
             item = QListWidgetItem()
             item.setData(Qt.UserRole, rom.path)
-            item.setSizeHint(QSize(0, 54))
+            item.setSizeHint(self.GRID_CELL if self.grid else QSize(0, 54))
             self.list.addItem(item)
             self._rows[rom.path] = row
             self._show(item, rom)
@@ -647,12 +703,15 @@ class LibraryPanel(QFrame):
             details.append(rom.year)
         if rom.built:
             details.append(f"✓ built ({rom.built[-1].title_id:016X})")
-        item.setText(f"{rom.title}\n{' · '.join(details)}")
-        item.setToolTip(str(rom.path))
+        if self.grid:
+            item.setText(rom.title + ("\n✓ built" if rom.built else ""))
+        else:
+            item.setText(f"{rom.title}\n{' · '.join(details)}")
+        item.setToolTip(f"{rom.path}\n{' · '.join(details)}")
         if rom.cover is not None:
             item.setIcon(QPixmap.fromImage(to_qimage(rom.cover)))
         else:
-            pix = QPixmap(self.ICON)
+            pix = QPixmap(self.GRID_ICON if self.grid else self.ICON)
             pix.fill(Qt.transparent)
             p = QPainter(pix)
             p.setRenderHint(QPainter.Antialiasing)
@@ -683,6 +742,7 @@ class LibraryPanel(QFrame):
             owned = sum(g.owned for g in self._catalog)
             summary += f"\nCollection: {owned} of {len(self._catalog)} games"
         self.count.setText(summary)
+        self._visible_timer.start()  # filtering moves other games into view
 
     # --- collection (all games from the database) ----------------------------
 
@@ -695,6 +755,8 @@ class LibraryPanel(QFrame):
         while self.list.count() > len(self.roms):  # drop the previous catalog rows
             self.list.takeItem(self.list.count() - 1)
         self._catalog = []
+        self._missing_covers = {}
+        self._cover_requested = set()
         if not self.show_missing.isChecked():
             self._filter()
             return
@@ -730,13 +792,79 @@ class LibraryPanel(QFrame):
         self._catalog = games
         grey = self.palette().placeholderText().color()
         for game in self._catalog_missing():
-            item = QListWidgetItem(f"{game.title}\n{game.system.key.upper()} · missing")
+            text = game.title if self.grid else f"{game.title}\n{game.system.key.upper()} · missing"
+            item = QListWidgetItem(text)
             item.setForeground(grey)
             item.setFlags(Qt.ItemIsEnabled)  # listed, but nothing to open
             item.setToolTip("Not in your ROM folder:\n" + "\n".join(game.releases[:6]))
-            item.setSizeHint(QSize(0, 40))
+            item.setSizeHint(self.GRID_CELL if self.grid else QSize(0, 40))
             self.list.addItem(item)
         self._filter()
+        self._visible_timer.start()
+
+    # --- covers of missing games -----------------------------------------------
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._visible_timer.start()
+
+    def _request_visible_covers(self):
+        """Queue covers for the missing games currently on screen."""
+        missing = self._catalog_missing()
+        if not missing:
+            return
+        viewport = self.list.viewport().rect()
+        start = len(self.roms)
+        for offset, game in enumerate(missing):
+            row = start + offset
+            item = self.list.item(row)
+            if item is None or item.isHidden() or row in self._cover_requested:
+                continue
+            if self.list.visualItemRect(item).intersects(viewport):
+                self._cover_requested.add(row)
+                self._cover_queue.put((self._catalog_generation, row, game))
+
+    def _cover_worker(self):
+        while True:
+            generation, row, game = self._cover_queue.get()
+            if generation != self._catalog_generation:
+                continue  # list changed meanwhile
+            cover = None
+            for name in game.releases[:4]:
+                try:
+                    cover = artwork.fetch_image(name, "boxart", game.system.database)
+                except InjectError:
+                    break  # offline
+                if cover is not None:
+                    break
+            if cover is not None:
+                cover.thumbnail((256, 256))
+                self._cover_ready.emit(generation, row, cover)
+
+    def _set_missing_cover(self, generation: int, row: int, cover):
+        if generation != self._catalog_generation:
+            return
+        self._missing_covers[row] = cover
+        item = self.list.item(row)
+        if item is not None:
+            item.setIcon(QPixmap.fromImage(to_qimage(self._style_missing(cover))))
+
+    def _style_missing(self, cover: Image.Image) -> Image.Image:
+        grey = cover.convert("L").convert("RGBA")
+        if self.missing_style.currentData() == "bw":
+            return grey
+        # greyed out: faded towards the background so owned games stand out
+        background = self.palette().base().color()
+        flat = Image.new("RGBA", grey.size, (background.red(), background.green(),
+                                             background.blue(), 255))
+        return Image.blend(grey, flat, 0.55)
+
+    def _missing_style_changed(self):
+        self.settings.setValue("library/missing_style", self.missing_style.currentData())
+        for row, cover in self._missing_covers.items():
+            item = self.list.item(row)
+            if item is not None:
+                item.setIcon(QPixmap.fromImage(to_qimage(self._style_missing(cover))))
 
     def _open_current(self):
         self._open_timer.stop()
@@ -755,6 +883,23 @@ class LibraryPanel(QFrame):
 
     def stop(self):
         self._generation += 1  # ends a running analysis
+
+
+class LibraryWindow(QMainWindow):
+    """The library as a large, resizable grid of covers in its own window."""
+
+    def __init__(self, main: "MainWindow"):
+        super().__init__(main)
+        self.setWindowTitle("vcinject — Library")
+        self.panel = LibraryPanel(grid=True)
+        self.panel.rom_chosen.connect(main.load_rom)
+        self.panel.rom_install.connect(main.install_from_library)
+        self.setCentralWidget(self.panel)
+        self.resize(1100, 780)
+
+    def closeEvent(self, event):
+        self.panel.stop()
+        super().closeEvent(event)
 
 
 class MainWindow(QMainWindow):
@@ -922,6 +1067,8 @@ class MainWindow(QMainWindow):
         self.library = LibraryPanel()
         self.library.rom_chosen.connect(self.load_rom)
         self.library.rom_install.connect(self.install_from_library)
+        self.library.open_window.connect(self.open_library_window)
+        self.library_window: LibraryWindow | None = None
         columns = QHBoxLayout()
         columns.setSpacing(16)
         columns.addWidget(self.library)
@@ -954,6 +1101,13 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "Select ROM", "", ROM_FILTER)
         if path:
             self.load_rom(Path(path))
+
+    def open_library_window(self):
+        if self.library_window is None:
+            self.library_window = LibraryWindow(self)
+        self.library_window.show()
+        self.library_window.raise_()
+        self.library_window.activateWindow()
 
     def install_from_library(self, path: Path):
         """Double-click in the library: open the ROM, then build and show the QR code

@@ -113,7 +113,12 @@ upload it.
 
 **Show missing games** in the library lists every game of the system from the
 No-Intro database below your ROMs, with a region filter and an
-"owned X of Y" count.
+"owned X of Y" count. Covers of missing games are loaded for what is on screen
+and shown greyed out or in black & white (your choice).
+
+**⧉** opens the library in its own resizable window as a grid of large covers –
+handy for browsing a big collection; clicking a game there opens it in the main
+window as usual.
 
 ## Command line
 
