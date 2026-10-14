@@ -18,6 +18,10 @@ with a GUI and a command line built on the same Python core.
 | NES | VirtuaNES / RetroArch forwarder | ✅ needs an emulator template |
 | NES, GB/GBC with Nintendo's own VC emulator | | planned |
 
+**Planned: Wii and Wii U.** Besides the 3DS, vcinject is meant to also build
+Virtual Console injects for the **Wii** (WAD channels) and the **Wii U**
+(installable with WUP Installer), from the same library and artwork.
+
 ## Features
 
 - **One click from ROM to console:** build the CIA and install it over Wi-Fi by
