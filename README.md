@@ -52,7 +52,7 @@ with a GUI and a command line built on the same Python core.
 ## Installation
 
 ```sh
-git clone https://github.com/<you>/vcinject.git
+git clone https://github.com/petter1/vcinject.git
 cd vcinject
 ./scripts/install.sh        # builds makerom + bannertool, creates .venv, installs vcinject
 ```
