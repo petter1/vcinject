@@ -850,7 +850,12 @@ class LibraryPanel(QFrame):
             for index, rom in indexed:  # dump check for entries from before it existed
                 if generation != self._generation:
                     return
-                if library.ensure_verified(rom):
+                changed = library.ensure_verified(rom)
+                try:
+                    changed = library.fix_hack(rom) or changed
+                except Exception:
+                    pass
+                if changed:
                     self._analyzed.emit(generation, index, rom)
             for done, (index, rom) in enumerate(todo, 1):
                 if generation != self._generation:

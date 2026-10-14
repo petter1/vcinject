@@ -266,6 +266,16 @@ def verify_data(path: Path, system: systems.System, data: bytes) -> LibraryRom:
     return rom
 
 
+def fix_hack(rom: LibraryRom) -> bool:
+    """A ROM hack indexed as its base game (by an older version): identify it
+    again. Returns True when it changed."""
+    if rom.method != "serial" or not rom.release:
+        return False
+    if not artwork.is_probably_hack(artwork.Match(rom.release, "serial"), systems.rom_name(rom.path)):
+        return False
+    return refresh(rom)
+
+
 def ensure_verified(rom: LibraryRom) -> bool:
     """Verify a ROM that came from the index before dumps were checked.
     Returns True when the result is new."""
@@ -348,16 +358,19 @@ def version_codes(roms: list[LibraryRom]) -> list[str]:
     return [code + (f"×{n}" if n > 1 else "") for code, n in counts.items()]
 
 
+HACK_METHODS = ("retrogamesnexus", "hack")
+
+
 def dump_is_bad(rom: LibraryRom) -> bool:
-    """The checksum matches no known good dump (and it is not a known ROM hack)."""
-    return rom.verified in ("mismatch", "unknown") and rom.method != "retrogamesnexus"
+    """The checksum matches no known good dump (and it is not a ROM hack)."""
+    return rom.verified in ("mismatch", "unknown") and rom.method not in HACK_METHODS
 
 
 def verified_label(rom: LibraryRom) -> str:
     """How the dump check reads for people ("" when not checked)."""
     if rom.verified == "good":
         return f"✓ verified good dump ({rom.verified_by})"
-    if rom.method == "retrogamesnexus":
+    if rom.method in HACK_METHODS:
         return "ROM hack"
     if rom.verified == "mismatch":  # a known cartridge, but other contents
         return "⚠ differs from the known dump (bad dump or modified)"
@@ -376,12 +389,16 @@ def _identify(rom: LibraryRom, cover: bool = True, refresh: bool = False) -> Non
         game_code = rom.serial if rom.system.key == "gba" else ""
         match = db.identify_crc(rom.crc, game_code, name_in_folder)
         if match and artwork.is_probably_hack(match, systems.rom_name(rom.path)):
+            # a ROM hack keeps its base game's serial; never list it as that game
             game, hack_cover = artwork.nexus_cover([plain_stem(systems.rom_name(rom.path))],
-                                                   rom.system.database, refresh)
+                                                   rom.system.database, refresh,
+                                                   context=match.name)
+            match = None
             if game:
-                match = None
                 rom.release, rom.year, rom.cover = game.name, game.year, hack_cover
                 rom.method = "retrogamesnexus"
+            else:
+                rom.method = "hack"  # not on RetroGamesNexus: named after its file
         if match:
             rom.release, rom.method = match.name, match.method
             families = sorted(s[:3] for s in db.serials.get(match.name, ()) if len(s) == 4)
@@ -399,7 +416,8 @@ def _identify(rom: LibraryRom, cover: bool = True, refresh: bool = False) -> Non
                     rom.cover = artwork.fetch_image(name, "boxart", rom.system.database, refresh)
                     if rom.cover is not None:
                         break
-        if cover and rom.cover is None and not (rom.release and not match):  # hacks: RetroGamesNexus
+        if cover and rom.cover is None and not (rom.release and not match) \
+                and rom.method != "hack":  # games libretro has no cover for: RetroGamesNexus
             game, rom.cover = artwork.nexus_cover(
                 [match.name if match else None, plain_stem(systems.rom_name(rom.path))],
                 rom.system.database, refresh)

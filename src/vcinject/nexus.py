@@ -97,8 +97,11 @@ def known_slugs() -> list[str] | None:
     return slugs() if path.is_file() else None
 
 
-def candidates(title: str, all_slugs: list[str]) -> list[tuple[float, str]]:
-    """Slugs whose title is close to ``title``, best first."""
+def candidates(title: str, all_slugs: list[str],
+               context: frozenset = frozenset()) -> list[tuple[float, str]]:
+    """Slugs whose title is close to ``title``, best first. Words of ``context``
+    (e.g. the base game of a ROM hack) may be missing from ``title``: a hack saved
+    as "Celia's Stupid" is listed as "Pokemon Celia's Stupid"."""
     wanted_words = words(title)
     wanted = " ".join(wanted_words)
     if not wanted:
@@ -111,6 +114,10 @@ def candidates(title: str, all_slugs: list[str]) -> list[tuple[float, str]]:
             continue  # Sonic 2 is not Sonic 3
         have = " ".join(have_words)
         score = 1.0 if have == wanted else difflib.SequenceMatcher(None, wanted, have).ratio()
+        extra = [w for w in have_words if w not in wanted_words]
+        if score < _MIN_SCORE and context and extra and set(extra) <= context \
+                and all(w in have_words for w in wanted_words):
+            score = 0.95  # the title plus words of the base game
         if score >= _MIN_SCORE:
             scored.append((score, slug))
     return sorted(scored, key=lambda s: (-s[0], len(s[1])))
@@ -145,15 +152,18 @@ def game(slug: str, refresh: bool = False) -> Game | None:
     return None
 
 
-def find(titles: list[str], system_key: str, refresh: bool = False) -> Game | None:
-    """The site's page for the first of ``titles`` it knows on that console."""
+def find(titles: list[str], system_key: str, refresh: bool = False,
+         context: str = "") -> Game | None:
+    """The site's page for the first of ``titles`` it knows on that console.
+    ``context``: the base game's title, for ROM hacks (see candidates())."""
     platform = PLATFORMS.get(system_key)
     if not platform:
         return None
     all_slugs = slugs()
+    extra_words = frozenset(words(context))
     seen = set()
     for title in titles:
-        for _score, slug in candidates(title, all_slugs)[:4]:
+        for _score, slug in candidates(title, all_slugs, extra_words)[:4]:
             if slug in seen:
                 continue
             seen.add(slug)

@@ -797,6 +797,9 @@ class MainWindow(QMainWindow):
             return
         if self.found and self.found.match and self.found.match.method == "retrogamesnexus":
             rom.method = "retrogamesnexus"
+        index = self.library._rows.get(self.rom_path)
+        if index is not None and self.library.roms[index].method in library.HACK_METHODS:
+            rom.method = self.library.roms[index].method  # the library knows it is a hack
         label = library.verified_label(rom)
         colour = "#d64034" if library.dump_is_bad(rom) else "#2e9d4f" if rom.verified == "good" else None
         self._dump = f'<span style="color:{colour}">{label}</span>' if colour else label

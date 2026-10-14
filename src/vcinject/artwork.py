@@ -309,9 +309,9 @@ def lookup(rom: bytes, game_code: str = "", filename: str = "",
     db = ReleaseDatabase.load(system=system)
     match = db.identify(rom, game_code, filename)
     if match is None or is_probably_hack(match, filename):
-        hack = nexus_artwork(filename, system) if "boxart" in kinds else Artwork()
-        if match is None or hack.found:
-            return hack
+        # a ROM hack is never shown as its base game, found on RetroGamesNexus or not
+        context = match.name if match else ""
+        return nexus_artwork(filename, system, context=context) if "boxart" in kinds else Artwork()
     images = {}
     for kind in kinds:
         image = fetch_image(match.name, kind, system)
@@ -359,22 +359,26 @@ def _system_key(database: str) -> str | None:
     return next((s.key for s in systems.SYSTEMS.values() if s.database == database), None)
 
 
-def nexus_cover(titles: list[str], system: str = SYSTEM, refresh: bool = False):
-    """(game, box art) from RetroGamesNexus, or (None, None). Never raises."""
+def nexus_cover(titles: list[str], system: str = SYSTEM, refresh: bool = False,
+                context: str = ""):
+    """(game, box art) from RetroGamesNexus, or (None, None). Never raises.
+    ``context``: the base game's name when looking for a ROM hack."""
     from . import nexus
     key = _system_key(system)
     if not key:
         return None, None
     try:
-        game = nexus.find([t for t in titles if t], key, refresh=refresh)
+        game = nexus.find([t for t in titles if t], key, refresh=refresh, context=context)
         return (game, nexus.cover(game, refresh=refresh)) if game else (None, None)
     except InjectError:
         return None, None
 
 
-def nexus_artwork(filename: str, system: str = SYSTEM, known: str | None = None) -> Artwork:
+def nexus_artwork(filename: str, system: str = SYSTEM, known: str | None = None,
+                  context: str = "") -> Artwork:
     """Box art, name and year from RetroGamesNexus (fallback, mostly ROM hacks)."""
-    game, image = nexus_cover([known, Path(filename).stem if filename else None], system)
+    game, image = nexus_cover([known, Path(filename).stem if filename else None], system,
+                              context=context)
     if game is None or image is None:
         return Artwork()
     return Artwork(Match(game.name, "retrogamesnexus"), {"boxart": image}, year=game.year,

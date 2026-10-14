@@ -82,3 +82,42 @@ def test_menu_offers_the_site_only_when_it_has_the_game(monkeypatch, tmp_path):
     assert library.nexus_url("Pokemon Clover", systems.SYSTEMS["snes"]) is None
     # remembered: a game the site does not have on that console is no longer offered
     assert not library.nexus_page_exists("Pokemon Clover", systems.SYSTEMS["snes"])
+
+
+def test_hack_found_with_words_of_its_base_game(monkeypatch, tmp_path):
+    _site(monkeypatch, tmp_path)
+    slugs = ["pokemon-celias-stupid", "pokemon-clover"]
+    assert nexus.candidates("Celia's Stupid (1.0.91)", slugs) == []
+    context = frozenset(nexus.words("Pokemon - FireRed Version (USA, Europe)"))
+    assert nexus.candidates("Celia's Stupid (1.0.91)", slugs, context)[0][1] == "pokemon-celias-stupid"
+    # words that are not from the base game still have to match
+    assert nexus.candidates("Stupid", ["pokemon-celias-stupid"], context) == []
+
+
+def test_unlisted_hack_is_never_its_base_game(monkeypatch, tmp_path):
+    from pathlib import Path
+
+    from vcinject import artwork, library, systems
+
+    _site(monkeypatch, tmp_path)
+
+    class Db:
+        serials = {"Pokemon - FireRed Version (USA, Europe)": {"BPRE"}}
+        by_sha1, by_crc = {}, {}
+
+        def identify_crc(self, *args):
+            return artwork.Match("Pokemon - FireRed Version (USA, Europe)", "serial")
+
+        def sibling_crcs(self, name):
+            return []
+
+        def siblings(self, name):
+            return []
+
+    monkeypatch.setattr(artwork.ReleaseDatabase, "load", classmethod(lambda cls, **kw: Db()))
+    path = tmp_path / "My Own Hack v2.gba"
+    path.write_bytes(b"\0" * 0x200)
+    rom = library.analyze(library.LibraryRom(Path(path), systems.SYSTEMS["gba"], 0x200))
+    assert rom.release is None and rom.method == "hack" and rom.family == ""
+    assert rom.title == "My Own Hack v2" and library.verified_label(rom) == "ROM hack"
+    assert not library.dump_is_bad(rom)
