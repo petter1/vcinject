@@ -5,6 +5,8 @@ by CRC32 first (exact dump), then by the cartridge serial (hacks, translations
 and other revisions), then by file name. The matching release name is the key
 for https://thumbnails.libretro.com, which hosts box art, title screens,
 in-game screenshots and logos for most releases. Nothing needs an API key.
+ROMs it does not know or has no box art for (mostly ROM hacks) are looked up
+on RetroGamesNexus as a fallback (see nexus.py).
 """
 from __future__ import annotations
 
@@ -51,7 +53,7 @@ _PENALTIES = ("(Beta", "(Proto", "(Demo", "(Sample", "(Kiosk", "(Virtual Console
 @dataclass
 class Match:
     name: str
-    method: str  # "crc", "serial" or "filename"
+    method: str  # "crc", "serial", "filename" or "retrogamesnexus"
 
 
 @dataclass
@@ -214,8 +216,10 @@ def lookup(rom: bytes, game_code: str = "", filename: str = "",
     """Identify the ROM and download all available artwork for it."""
     db = ReleaseDatabase.load(system=system)
     match = db.identify(rom, game_code, filename)
-    if match is None:
-        return Artwork()
+    if match is None or is_probably_hack(match, filename):
+        hack = nexus_artwork(filename, system) if "boxart" in kinds else Artwork()
+        if match is None or hack.found:
+            return hack
     images = {}
     for kind in kinds:
         image = fetch_image(match.name, kind, system)
@@ -235,8 +239,54 @@ def lookup(rom: bytes, game_code: str = "", filename: str = "",
         if not missing:
             break
     crcs = db.sibling_crcs(match.name)
-    return Artwork(match, images, year=_metadata("releaseyear", crcs, system),
-                   publisher=_metadata("publisher", crcs, system))
+    found = Artwork(match, images, year=_metadata("releaseyear", crcs, system),
+                    publisher=_metadata("publisher", crcs, system))
+    if "boxart" in kinds and "boxart" not in images:
+        extra = nexus_artwork(filename, system, known=match.name)
+        if "boxart" in extra.images:
+            images["boxart"] = extra.images["boxart"]
+            found.year = found.year or extra.year
+            found.publisher = found.publisher or extra.publisher
+    return found
+
+
+def is_probably_hack(match: Match, filename: str) -> bool:
+    """Matched only by the cartridge serial, but named like a different game: a ROM
+    hack keeps its base game's serial (Pokémon Clover is BPRE like FireRed)."""
+    if match.method != "serial" or not filename:
+        return False
+    import difflib
+    from .nexus import words
+    mine, base = " ".join(words(Path(filename).stem)), " ".join(words(match.name))
+    return bool(mine) and difflib.SequenceMatcher(None, mine, base).ratio() < 0.8 \
+        and base not in mine
+
+
+def _system_key(database: str) -> str | None:
+    from . import systems
+    return next((s.key for s in systems.SYSTEMS.values() if s.database == database), None)
+
+
+def nexus_cover(titles: list[str], system: str = SYSTEM):
+    """(game, box art) from RetroGamesNexus, or (None, None). Never raises."""
+    from . import nexus
+    key = _system_key(system)
+    if not key:
+        return None, None
+    try:
+        game = nexus.find([t for t in titles if t], key)
+        return (game, nexus.cover(game)) if game else (None, None)
+    except InjectError:
+        return None, None
+
+
+def nexus_artwork(filename: str, system: str = SYSTEM, known: str | None = None) -> Artwork:
+    """Box art, name and year from RetroGamesNexus (fallback, mostly ROM hacks)."""
+    game, image = nexus_cover([known, Path(filename).stem if filename else None], system)
+    if game is None or image is None:
+        return Artwork()
+    return Artwork(Match(game.name, "retrogamesnexus"), {"boxart": image}, year=game.year,
+                   publisher=game.developer)
 
 
 _META_RE = re.compile(r'game \((?P<body>.*?)\n\)', re.S)

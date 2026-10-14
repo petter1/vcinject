@@ -68,6 +68,12 @@ def analyze(rom: LibraryRom, online: bool = True, cover: bool = True) -> Library
         db = artwork.ReleaseDatabase.load(system=rom.system.database)
         game_code = data[0xAC:0xB0].decode("ascii", "replace") if rom.system.key == "gba" else ""
         match = db.identify(rom.system.strip_header(data), game_code, systems.rom_name(rom.path))
+        if match and artwork.is_probably_hack(match, systems.rom_name(rom.path)):
+            game, hack_cover = artwork.nexus_cover([Path(systems.rom_name(rom.path)).stem],
+                                                   rom.system.database)
+            if game:
+                match = None
+                rom.release, rom.year, rom.cover = game.name, game.year, hack_cover
         if match:
             rom.release = match.name
             crcs = db.sibling_crcs(match.name)
@@ -76,8 +82,15 @@ def analyze(rom: LibraryRom, online: bool = True, cover: bool = True) -> Library
                 for name in (match.name, *db.siblings(match.name)[:3]):
                     rom.cover = artwork.fetch_image(name, "boxart", rom.system.database)
                     if rom.cover is not None:
-                        rom.cover.thumbnail((128, 128))
                         break
+        if cover and rom.cover is None and not (rom.release and not match):  # hacks: RetroGamesNexus
+            game, rom.cover = artwork.nexus_cover(
+                [match.name if match else None, Path(systems.rom_name(rom.path)).stem],
+                rom.system.database)
+            if game and not match:
+                rom.release, rom.year = game.name, game.year
+        if rom.cover is not None:
+            rom.cover.thumbnail((128, 128))
     except InjectError:
         pass  # offline: the library still lists the file
     return rom

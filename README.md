@@ -30,7 +30,9 @@ with a GUI and a command line built on the same Python core.
   or handheld with your game on it, the plate with title and release year in all
   13 console languages, the console's jingle and the bevelled VC icon frame.
 - **Artwork and metadata automatically:** box art, title screens, logos,
-  release year and publisher from the libretro databases, matched by checksum.
+  release year and publisher from the libretro databases, matched by checksum;
+  ROM hacks and games missing there get their cover from
+  [RetroGamesNexus](https://retrogamesnexus.com).
 - **GBA saves that work,** including 1 Mbit flash games like Pokémon
   Ruby/Sapphire/Emerald/FireRed/LeafGreen; save types are detected
   automatically.
@@ -265,6 +267,7 @@ In the installed app, the command line is the app binary with arguments, e.g.
 - [NSUI Banner Fixer](https://github.com/pivotiiii/nsui_banner_fixer) – banner plate languages
 - [libretro-database](https://github.com/libretro/libretro-database) and
   [libretro thumbnails](https://thumbnails.libretro.com) – game data and artwork
+- [RetroGamesNexus](https://retrogamesnexus.com) – fallback covers, e.g. for ROM hacks
 - [Project_CTR](https://github.com/3DSGuy/Project_CTR), [3ds-bannertool](https://github.com/carstene1ns/3ds-bannertool)
 
 ## Legal

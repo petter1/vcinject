@@ -1222,8 +1222,12 @@ class MainWindow(QMainWindow):
             self.drop.release.setText(f"✓ {result.match.name}")
             if self.title_edit.text() == self.rom_path.stem[:self.title_edit.maxLength()]:
                 self.title_edit.setText(_display_title(result.match.name))
-            self.art_status.setText(f"Matched by {result.match.method}; "
-                                    f"{len(result.images)} images from the libretro database.")
+            if result.match.method == "retrogamesnexus":
+                self.art_status.setText("Not in the No-Intro database (ROM hack?); box art from "
+                                        "RetroGamesNexus.")
+            else:
+                self.art_status.setText(f"Matched by {result.match.method}; "
+                                        f"{len(result.images)} images from the libretro database.")
             if result.year and not self.released_edit.text():
                 self.released_edit.setText(result.year)
             if result.publisher and self.publisher_edit.text() == "Virtual Console":
