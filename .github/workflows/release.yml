@@ -80,8 +80,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y ./dist/*.deb
-          vcinject --version
-          code=0; QT_QPA_PLATFORM=offscreen timeout 10 vcinject || code=$?
+          /usr/bin/vcinject --version
+          code=0; QT_QPA_PLATFORM=offscreen timeout 10 /usr/bin/vcinject || code=$?
           test "$code" -eq 124   # still running after 10 s: the GUI started
 
       - uses: actions/upload-artifact@v4
