@@ -14,9 +14,15 @@ with a GUI and a command line built on the same Python core.
 | Game Boy Advance | natively on the 3DS's GBA hardware (AGB_FIRM) | ✅ |
 | Super Nintendo | snes9x_3ds forwarder | ✅ needs an emulator template |
 | Mega Drive / Genesis | RetroArch forwarder | ✅ needs an emulator template |
-| Game Boy / Color | Nintendo's own VC emulator (from an official GB/GBC VC title) or a RetroArch forwarder | ✅ needs an emulator template |
+| Game Boy / Color | RetroArch forwarder; Nintendo's own VC emulator is experimental (see below) | ✅ needs an emulator template |
 | NES | VirtuaNES / RetroArch forwarder | ✅ needs an emulator template |
 | NES with Nintendo's own VC emulator | | planned |
+
+**Game Boy with Nintendo's emulator (experimental):** the emulator from an official
+GB/GBC VC title runs the game, but it expects its save data (`sav.dat`) to exist
+already – the eShop creates it, FBI does not – so a fresh install stops with
+"the SD card was removed". Until that is solved, Game Boy games use RetroArch by
+default (Advanced → Emulator).
 
 **Planned: Wii and Wii U.** Besides the 3DS, vcinject is meant to also build
 Virtual Console injects for the **Wii** (WAD channels) and the **Wii U**

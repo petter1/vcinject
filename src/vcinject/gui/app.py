@@ -653,8 +653,8 @@ class MainWindow(QMainWindow):
                            self.brightness, self.brightness_label]
         # Game Boy / Color: Nintendo's VC emulator or a RetroArch forwarder
         self.gb_emulator = QComboBox()
-        for key, label in (("auto", "Automatic (Nintendo VC when set up)"),
-                           ("nintendo", "Nintendo Virtual Console"),
+        for key, label in (("auto", "Automatic (RetroArch when set up)"),
+                           ("nintendo", "Nintendo Virtual Console (experimental)"),
                            ("retroarch", "RetroArch forwarder")):
             self.gb_emulator.addItem(label, key)
         self.gb_emulator.setCurrentIndex(max(0, self.gb_emulator.findData(
@@ -780,7 +780,7 @@ class MainWindow(QMainWindow):
             options = builder.GbaInjectOptions(rom_path=self.rom_path,
                                                gb_emulator=self.gb_emulator.currentData())
             if builder.gb_emulator(options) == "nintendo":
-                how = ("Nintendo VC emulator" if gbvc.installed_kinds()
+                how = ("Nintendo VC emulator (experimental)" if gbvc.installed_kinds()
                        else "⚠ Nintendo VC emulator not set up yet")
                 self.drop.details.setText(f"{system.name} · {size} · {how}")
                 return

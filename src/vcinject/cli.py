@@ -76,7 +76,8 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--brightness", type=float, default=gba.DEFAULT_BRIGHTNESS,
                    help="color LUT scale 0.1-1.0 (default: 1.0; official titles use 0.7)")
     g.add_argument("--gb-emulator", choices=["auto", "nintendo", "retroarch"], default="auto",
-                   help="Game Boy / Color: Nintendo's VC emulator (default when set up) or RetroArch")
+                   help="Game Boy / Color: RetroArch forwarder (default when set up) or Nintendo's "
+                        "VC emulator (experimental: needs save data the eShop creates)")
     g.add_argument("--keep-cxi", action="store_true", help="also write the intermediate .cxi")
     g.add_argument("--qr", action="store_true",
                    help="after building, serve the CIA and show a QR code for FBI")

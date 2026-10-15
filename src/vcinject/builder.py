@@ -105,8 +105,8 @@ class GbaInjectOptions:
     banner_screen: Image.Image | None = None
     release_year: str | None = None
     plate_language: str | None = None  # for banners with one shared plate; None = system
-    # Game Boy / Color: "nintendo" (official VC emulator), "retroarch" (forwarder) or
-    # "auto" (Nintendo's when it is set up)
+    # Game Boy / Color: "nintendo" (official VC emulator, experimental), "retroarch"
+    # (forwarder) or "auto" (RetroArch when set up, else Nintendo's)
     gb_emulator: str = "auto"
     keep_cxi: bool = False
 
@@ -144,13 +144,14 @@ def build(options: GbaInjectOptions, log: Log = print) -> BuildResult:
 
 
 def gb_emulator(options: GbaInjectOptions) -> str:
-    """Which emulator runs a Game Boy game: Nintendo's VC emulator unless RetroArch
-    is asked for or only RetroArch is set up."""
+    """Which emulator runs a Game Boy game. RetroArch by default: Nintendo's VC
+    emulator expects save data (sav.dat) that only the eShop creates, so a title
+    installed with FBI stops with "the SD card was removed" (experimental)."""
     if options.gb_emulator in ("nintendo", "retroarch"):
         return options.gb_emulator
-    if gbvc.installed_kinds() or "gbc" not in forwarder.installed_kinds():
-        return "nintendo"
-    return "retroarch"
+    if "gbc" in forwarder.installed_kinds() or not gbvc.installed_kinds():
+        return "retroarch"
+    return "nintendo"
 
 
 def build_gb_vc(options: GbaInjectOptions, log: Log = print) -> BuildResult:
@@ -161,7 +162,9 @@ def build_gb_vc(options: GbaInjectOptions, log: Log = print) -> BuildResult:
         c.warnings.append("A Game Boy Color game runs on the Game Boy emulator build here; "
                           "set up a Color VC title (e.g. Pokémon Gold) for the best result.")
     exheader, romfs_image = template.build(c.rom.data, c.title_id, c.product_code.rsplit("-", 1)[-1])
-    log(f"Emulator:     Nintendo Virtual Console ({gbvc.KINDS[template.kind]})")
+    log(f"Emulator:     Nintendo Virtual Console ({gbvc.KINDS[template.kind]}) – experimental")
+    log("Warning:      Nintendo's emulator needs save data the eShop creates; installed with "
+        "FBI it may stop with 'the SD card was removed'. RetroArch is the safe choice.")
     log(f"Save data:    {struct.unpack_from('<Q', exheader, 0x1C0)[0] // 1024} KiB")
     _finish(options, c, code=template.code, exheader=exheader, romfs=romfs_image,
             logo=template.logo, save_type_name="", log=log)
