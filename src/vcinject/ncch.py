@@ -148,6 +148,27 @@ def parse_ncch(data: bytes) -> NcchParts:
     )
 
 
+# TMD signature types -> size of signature and padding before the TMD header
+_SIGNATURE_SIZES = {0x10000: 0x240, 0x10001: 0x140, 0x10002: 0x80,
+                    0x10003: 0x240, 0x10004: 0x140, 0x10005: 0x80}
+
+
+def cia_title(data: bytes) -> tuple[int, int]:
+    """Title ID and version from a CIA's TMD; the start of the file is enough."""
+    header_size, _type, _version, cert_size, ticket_size, tmd_size = struct.unpack_from("<IHHIII", data, 0)
+    if header_size != 0x2020:
+        raise InjectError("Not a CIA file.")
+    tmd = sum(_align(size, 64) for size in (header_size, cert_size, ticket_size))
+    try:
+        signature = struct.unpack_from(">I", data, tmd)[0]
+        header = tmd + _SIGNATURE_SIZES[signature]
+        title_id = struct.unpack_from(">Q", data, header + 0x4C)[0]
+        version = struct.unpack_from(">H", data, header + 0x9C)[0]
+    except (KeyError, struct.error) as exc:
+        raise InjectError("The CIA's title metadata could not be read.") from exc
+    return title_id, version
+
+
 def first_cia_content(data: bytes) -> bytes:
     """Return the first content (the CXI) of a CIA whose contents are not encrypted."""
     header_size, _type, _version, cert_size, ticket_size, tmd_size, _meta, content_size = \

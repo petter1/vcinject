@@ -115,6 +115,38 @@ def release(app: App) -> Release:
                    int(asset.get("size", 0)), licence)
 
 
+def release_title(app: App) -> tuple[int, int]:
+    """Title ID and version of the app's newest release, read from the first bytes of
+    its CIA (kept per release, so it is fetched once)."""
+    from .artwork import conditional_get
+    from .ncch import cia_title
+    found = release(app)
+    tag = re.sub(r"[^A-Za-z0-9._-]", "_", found.tag)
+    cache = _folder() / app.key / tag / "title.json"
+    if cache.is_file():
+        known = json.loads(cache.read_text())
+        return int(known["title_id"], 16), known["version"]
+    data, _etag = conditional_get(found.url, headers={"Range": "bytes=0-65535"})
+    if not isinstance(data, bytes):
+        raise InjectError(f"{app.name} {found.tag} could not be downloaded.")
+    title_id, version = cia_title(data)
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"title_id": f"{title_id:016X}", "version": version}))
+    return title_id, version
+
+
+LUMA_REPO = "LumaTeam/Luma3DS"
+
+
+def luma_release() -> tuple[str, str]:
+    """Tag and download URL (a .zip with boot.firm) of the newest Luma3DS."""
+    latest = _get_json(API.format(repo=LUMA_REPO) + "/releases/latest", _folder() / "luma.release.json")
+    asset = next((a for a in latest.get("assets", []) if a.get("name", "").endswith(".zip")), None)
+    if asset is None:
+        raise InjectError(f"Luma3DS {latest.get('tag_name', '')} has no download.")
+    return latest.get("tag_name", "?"), asset["browser_download_url"]
+
+
 def download(app: App) -> Path:
     """The app's .cia, downloaded once per version from the author's release."""
     from .artwork import _download
