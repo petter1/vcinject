@@ -349,6 +349,16 @@ builds flat banners.
 
 A hardware test plan is in [docs/TESTPLAN.md](docs/TESTPLAN.md).
 
+**Git workflow:** main stays linear. Work happens on a branch per feature
+(`feature/<name>`, `fix/<name>`); when it is done, its commits are tidied up,
+rebased onto main and main is fast-forwarded – no merge commits. Pull with
+rebase so local commits never create merges:
+
+```sh
+git config pull.rebase true
+git config rebase.autoStash true
+```
+
 **Installers:** `python packaging/build_app.py` builds the one for the current
 system into `dist/` (needs `pip install pyinstaller`, plus Inno Setup on
 Windows). Pushing a tag `v1.2.3` builds all of them on GitHub Actions and
