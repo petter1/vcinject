@@ -9,6 +9,11 @@ working saves. It is an open, cross-platform alternative to the Windows-only
 [New Super Ultimate Injector (NSUI)](https://gbatemp.net/threads/discussion-new-super-ultimate-injector-nsui.500376/),
 with a GUI and a command line built on the same Python core.
 
+With **vcinject Link**, a small app for the 3DS that comes with it, vcinject
+also looks after your consoles over Wi-Fi: it installs games on one or all of
+them with a click, shows what is installed and what could be updated,
+backs up saves and arranges the HOME Menu.
+
 | System | How it runs | |
 | --- | --- | --- |
 | Game Boy Advance | natively on the 3DS's GBA hardware (AGB_FIRM) | ✅ |
@@ -30,13 +35,20 @@ Virtual Console injects for the **Wii** (WAD channels) and the **Wii U**
 
 ## Features
 
-- **One click from ROM to console:** build the CIA and install it over Wi-Fi by
-  scanning a QR code with FBI – no SD card shuffling.
-- **ROM library:** point it at your ROM folder (sub folders included) and pick
-  games from a list with covers; zipped ROMs (one game per .zip) work like
-  unpacked ones, and one click packs each unpacked game into its own .zip;
-  optionally list every game of a system from
-  the No-Intro database to see what your collection is missing.
+- **One click from ROM to console:** choose a game, click **Install on
+  Petter1 (3DS XL)** – vcinject builds the CIA and installs it over Wi-Fi on
+  the 3DS that runs vcinject Link (or on all of them). A QR code for FBI still
+  works for consoles without vcinject Link.
+- **Your collection as a cover gallery:** point vcinject at your ROM folder
+  (sub folders included); every game shows on which 3DS it is installed.
+  Zipped ROMs (one game per .zip) work like unpacked ones; optionally the
+  No-Intro database shows what your collection is missing.
+- **My 3DS:** one card per console; per console a status report (system,
+  Luma3DS, vcinject Link and homebrew up to date, sound firmware, SD space)
+  with *Update* and *Update all*, mirrored on the 3DS's own screen; the
+  installed titles as a game database with what FBI offers – start a title,
+  back up and restore its save, save its icon and banner, delete it; and the
+  **HOME Menu** as on the console, to arrange games and apps.
 - **VC Console Look:** the official 3D banner per console – rotating cartridge
   or handheld with your game on it, the plate with title and release year in all
   13 console languages, the console's jingle and the bevelled VC icon frame.
@@ -48,17 +60,18 @@ Virtual Console injects for the **Wii** (WAD channels) and the **Wii U**
 - **GBA saves that work,** including 1 Mbit flash games like Pokémon
   Ruby/Sapphire/Emerald/FireRed/LeafGreen; save types are detected
   automatically.
-- **No title ID clashes:** a local register of every build, plus an import of
-  your console's ticket database.
-- **Setup assistant and self-healing:** everything needed is checked on every
-  start; missing or damaged parts are set up again, and a build that hits a
-  missing part asks for exactly that and retries.
+- **No title ID clashes:** a local register of every build; the titles on
+  every 3DS that runs vcinject Link are taken into account automatically.
+- **Setup as one checklist** that heals itself: everything needed is checked on
+  every start; missing or damaged parts are set up again, and a build that hits
+  a missing part asks for exactly that and retries.
 
 ## What you need
 
-- A 3DS with custom firmware ([Luma3DS](https://3ds.hacks.guide)) and
-  [FBI](https://github.com/TheRealZora/FBI-Reloaded) to install CIAs.
-  Luma's signature patches (on by default) are required, as for every inject.
+- A 3DS with custom firmware ([Luma3DS](https://3ds.hacks.guide)); its
+  signature patches (on by default) are required, as for every inject.
+  [FBI](https://github.com/TheRealZora/FBI-Reloaded) installs vcinject Link
+  once (QR code); after that vcinject installs over Wi-Fi by itself.
 - macOS 12+, Windows 10/11 (64-bit) or Linux.
 - Your own game dumps. vcinject contains **no** games, emulators, Nintendo
   banners or keys.
@@ -122,8 +135,8 @@ opens and walks you through the rest.
   firmware `sdmc:/3ds/dspfirm.cdc`, dumped once with **DSP1** – otherwise they have
   no sound or don't start. RetroArch itself does not need to be installed.
 
-**3DS Homebrew…** in the GUI (or `vcinject homebrew`) lists this and installs
-homebrew by QR code, downloaded from each author's latest GitHub release and only
+**Homebrew** in the GUI (or `vcinject homebrew`) lists this and installs
+homebrew over Wi-Fi or by QR code, downloaded from each author's latest GitHub release and only
 for projects with an open-source licence: DSP1, FBI Reloaded, Universal-Updater,
 Checkpoint, PKSM, ftpd and Anemone3DS.
 
@@ -134,8 +147,8 @@ vcinject homebrew dsp1 --qr      # download DSP1 and show a QR code for FBI
 
 ## First-time setup
 
-The assistant (GUI: **Setup…**, terminal: `vcinject doctor --fix`) shows every
-part and its state:
+**Setup** in the GUI (terminal: `vcinject doctor --fix`) shows every part and
+its state:
 
 | Part | Needed for | Where it comes from |
 | --- | --- | --- |
@@ -169,14 +182,27 @@ upload it.
 
 ## Using the GUI
 
-1. Choose your ROM folder in the **Library** (or drop a ROM on the window).
-   Arrow keys browse; the preview shows the HOME Menu icon and the rotating
-   banner as they will appear.
-2. Adjust title, publisher, release year or artwork if you like. **Advanced**
-   holds the title ID, save type, plate language, LCD ghosting and brightness.
-3. **Install via QR** builds the CIA and shows a QR code (click it to enlarge).
-   On the 3DS: **FBI → Remote Install → Scan QR Code**. Double-clicking a game
-   in the library does all of this in one go.
+One window, four sections in the side bar:
+
+- **Games** – your collection as a cover gallery. Click a game for its page:
+  *On your 3DS* shows on which console it is installed (with *Install* per
+  console), the preview shows the HOME Menu icon and the rotating banner, and
+  the big button installs it where **Install to** (top right) says – a 3DS,
+  all of them, or a QR code for FBI. Title, artwork and the advanced settings
+  (title ID, save type, plate language, LCD ghosting, brightness) are folded
+  away under *Customize*. Double-clicking a game in the gallery installs it
+  right away; **Build CIA** only writes the file.
+- **My 3DS** – one card per console that runs vcinject Link. Open one for
+  its **Overview** (status report with *Update* / *Update all*, and the
+  activity log, the same as on the 3DS), its **Titles** (tiles with filters
+  and search; start a title, back up or restore its save, save icon and
+  banner, delete) and its **HOME Menu**. After updates that need a restart,
+  vcinject offers it, reconnects by itself and says whether everything
+  worked.
+- **Homebrew** – apps for the 3DS straight from their authors' releases
+  (open-source licences only), installed over Wi-Fi or by QR code.
+- **Setup** – everything vcinject needs as one checklist, each part with its
+  state and a button to set it up.
 
 On the first start with a ROM folder, **Download game covers** offers to
 fetch every cover – your games and every missing game of the same consoles –
@@ -203,15 +229,14 @@ modified) or *unverified* (in no list: hacks, translations, homebrew).
 `vcinject verify <files or folders>` does the same on the command line.
 
 Under the ROM, vcinject shows its **CRC32** and cartridge **serial** – the
-keys No-Intro and libretro identify a dump by (libretro has no running index
-number) – with links to the release's entry in the libretro database and to
-the game's page on RetroGamesNexus; both are also in the right-click menu and
-the Details view. Games without any cover get a box in their console's style.
+keys No-Intro and libretro identify a dump by – with links to the release's
+entry in the libretro database and to the game's page on RetroGamesNexus; both
+are also in the right-click menu and the Details view. Games without any cover
+get a box in their console's style.
 
-**Show missing games** in the library lists every game of the system from the
-No-Intro database below your ROMs, with a region filter and an
-"owned X of Y" count. Covers of missing games are loaded for what is on screen
-and shown greyed out or in black & white (your choice).
+**Show missing games** lists every game of the system from the No-Intro
+database next to your ROMs, with a region filter and an "owned X of Y" count;
+covers of missing games are shown greyed out or in black & white.
 
 **One entry per game:** language versions and copies of a game are folded
 into one entry ("3 versions"); the version menu under the ROM picks which one
@@ -219,37 +244,22 @@ to build. Copies of the same release are flagged – bit-identical or not – an
 **Versions and duplicates…** (right-click) moves the spare ones to the trash.
 
 **View options** (next to the search field) holds the filters, sorting and
-display settings in one window; a line under the search field sums up what is
-active. With *Version symbols on covers*, each cover shows the regions of the
-versions you have (DE, US/EU, JP …, DE×2 for two copies).
+display settings; the gallery can also show **Details** (a sortable table) or
+**Cover Flow**. With *Version symbols on covers*, each cover shows the regions
+of the versions you have (DE, US/EU, JP …, DE×2 for two copies); purple
+labels in the top right corner name the 3DS a game is installed on.
 
 **Sort and series:** sort by name, release year, system or folder. Series
 are recognised from the titles (e.g. all Pokémon games); the series menu
 filters by one (*Pokemon (5/7)* = owned/known) or by compilations. With
 **Group series** on, each series is shown as one stack of covers – click it to
-open it in place, click again to close it. With missing games shown, *Owned
-first* keeps your own games on top or mixes them into the order, *Only series
-I own* hides missing games except those of a series you have at least one game
-of, and *Betas & prototypes* also lists games that were never released.
+open it in place. *Owned first*, *Only series I own* and *Betas & prototypes*
+shape the list of missing games.
 
-**Zipping:** **Zip** packs every unpacked ROM in the library into its own
-.zip file next to it – one game per zip, named like the ROM
-(`Golden Sun (Europe).gba` → `Golden Sun (Europe).zip`), never one archive for
-the whole folder. Each original is deleted only after its zip was read back
-and verified; zips that already exist are left alone. vcinject reads zipped
-ROMs directly, so nothing needs unpacking to build an inject.
-
-**File names:** **Names** renames identified ROMs to their official release
-name – optionally after every scan – and right-click → *Self-dumped* marks a
-ROM as dumped from your own cartridge by adding ` - selfdumped` to its file
-name (the mark is kept when renaming). Zipped ROMs are renamed inside, too.
-
-**⧉** opens the library in its own resizable window with three views:
-**Grid** (large covers), **Details** (a table with system, year, series,
-release, folder, size and status; click a column header to sort, stacks are
-tree nodes) and **Cover Flow** (arrow keys, mouse wheel or the scroll bar;
-Enter or a double-click builds and installs). Clicking a game there opens it in the main
-window as usual.
+**Zipping and file names:** **Zip** packs every unpacked ROM into its own .zip
+next to it (each original is deleted only after its zip was verified);
+**Names** renames identified ROMs to their official release name, and
+right-click → *Self-dumped* marks a ROM as dumped from your own cartridge.
 
 ## Command line
 
@@ -278,12 +288,25 @@ Useful `build` options: `--title`, `--publisher`, `--released`,
 ## Managing the 3DS over Wi-Fi (vcinject Link)
 
 vcinject ships a small 3DS app, **vcinject Link**. Install it once
-(`vcinject 3ds setup` shows a QR code for FBI) and start it from the HOME
-Menu: vcinject then finds the 3DS in the same Wi-Fi and can list what is
-installed, install CIAs directly (no FBI or QR code needed), delete titles
-and restart the 3DS. Wherever vcinject offers *Install via QR*, an *Install on
-<3DS>* button appears as soon as a 3DS runs vcinject Link (with several: one
-of them or all); double-clicking a game in the library installs it that way.
+(**Setup → Install vcinject Link…** or `vcinject 3ds setup` shows a QR code for
+FBI) and start it from the HOME Menu: vcinject finds the 3DS in the same Wi-Fi
+by itself, and every 3DS that runs it shows up under **My 3DS** and in
+**Install to**. On the 3DS, vcinject Link shows what vcinject is doing, the
+status report and an activity log; it updates and restarts itself when
+vcinject asks.
+
+What it can do: install CIAs (several 3DSs at once), list titles with their
+icons, start a title, delete titles, back up and restore saves, check and
+install updates of Luma3DS and homebrew, restart the 3DS, and read and arrange
+the HOME Menu.
+
+**HOME Menu:** games and apps on the SD card can be arranged and moved into
+the existing folders; *Save to 3DS* backs up the current layout on the
+computer, writes the new one and restarts the 3DS (the HOME Menu reads it only
+when it starts), then checks that every icon is where it was put. Folders,
+system apps and the Game Card stay where they are for now: the 3DS keeps their
+file locked while it runs (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md);
+a GodMode9 script is planned, [docs/TODO.md](docs/TODO.md)).
 
 ```sh
 vcinject 3ds setup                 # install vcinject Link by QR code
@@ -291,18 +314,12 @@ vcinject 3ds find                  # 3DSs running vcinject Link
 vcinject 3ds titles                # installed games and apps
 vcinject 3ds install a.cia b.cia   # install over Wi-Fi
 vcinject 3ds delete 000400000F783500
+vcinject 3ds restart-app           # restart vcinject Link (e.g. after updating it)
 ```
 
-In the GUI, **My 3DS…** shows the installed titles with their icons and the
-**HOME Menu** as on the console, folders included: drag games and apps on the
-SD card to arrange them or drop them onto a folder. *Save to 3DS* backs up the
-current layout on the computer, writes the new one and restarts the 3DS (the
-HOME Menu reads it only when it starts). Folders, system apps and the Game Card
-stay where they are for now: the 3DS keeps their file (Launcher.dat) locked
-while it runs; vcinject reads it from the NAND, but can't write it there.
-
 vcinject Link is built from [companion/](companion/) with
-`scripts/build-companion.sh` (devkitARM, or Docker).
+`scripts/build-companion.sh` (devkitARM, or Docker); the built CIA is part of
+vcinject.
 
 ## Saves
 
@@ -313,23 +330,27 @@ vcinject Link is built from [companion/](companion/) with
   `nsui_formwarders_data/<system>_<id>_<title>/` (compatible with NSUI injects).
 - Rebuilding a game keeps its title ID, so installing the new CIA updates the
   title and keeps the save.
+- **My 3DS → Titles → Back up save now** copies a title's save data to this
+  computer (one zip per console and title); *Restore a save…* puts one back.
 
 If a GBA game doesn't save, set its save type by hand under **Advanced**. The
 GBA real-time clock is reported not to run under AGB_FIRM.
 
 ## Avoiding title IDs already on your 3DS
 
-vcinject never reuses a title ID of something it built. To also respect titles
-from other sources, import your console's ticket database: in GodMode9 copy
+vcinject never reuses a title ID of something it built, nor one installed on
+a 3DS that runs vcinject Link – it reads them each time it connects. For a 3DS
+without vcinject Link, import its ticket database: in GodMode9 copy
 `[1:] SYSNAND CTRNAND/dbs/ticket.db` to `[0:] SDCARD/gm9/out`, move it to your
-computer and use **Import tickets…** (or `vcinject import-tickets ticket.db`).
+computer and use **Setup → Import ticket.db…** (or `vcinject import-tickets ticket.db`).
 
 ## Troubleshooting
 
 | Problem | Try |
 | --- | --- |
-| Something is missing or a template seems broken | `vcinject doctor --fix` or **Setup…**; damaged files are moved aside as `*.broken-<time>` and can be set up again |
+| Something is missing or a template seems broken | `vcinject doctor --fix` or **Setup**; damaged files are moved aside as `*.broken-<time>` and can be set up again |
 | The 3DS can't download via QR | same Wi-Fi? allow incoming connections in the macOS firewall; set `--host`/`--port` |
+| My 3DS finds no 3DS | vcinject Link open on it, both in the same Wi-Fi? Its bottom screen shows its address: *Connect by IP…* |
 | A GBA game doesn't save | set the save type under **Advanced**, rebuild, reinstall |
 | A GBA game always starts with "New Game" after a vcinject update | delete the title and its ticket in FBI, then reinstall |
 | Install fails with `0xC8E083FC` ("already exists") | delete the old title and ticket in FBI first, or use another title ID |
@@ -365,20 +386,10 @@ builds flat banners.
 .venv/bin/pytest
 ```
 
-| Module | |
-| --- | --- |
-| `gba.py` | GBA ROM parsing, save detection, footer |
-| `ncch.py`, `romfs.py`, `smdh.py`, `cgfx.py` | 3DS container and banner formats |
-| `vcbanner.py` | VC Console Look |
-| `forwarder.py` | emulator forwarders |
-| `artwork.py`, `library.py` | databases, artwork, ROM library |
-| `registry.py`, `tickets.py` | title IDs |
-| `health.py` | setup checks and self-healing |
-| `remote.py` | talking to vcinject Link on the 3DS ([companion/](companion/)) |
-| `builder.py` | build pipeline |
-| `cli.py`, `gui/app.py` | front ends |
-
-A hardware test plan is in [docs/TESTPLAN.md](docs/TESTPLAN.md).
+How it fits together – components, the vcinject Link protocol, where data is
+kept, the HOME Menu formats and the decisions behind them – is in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); a hardware test plan is in
+[docs/TESTPLAN.md](docs/TESTPLAN.md), open work in [docs/TODO.md](docs/TODO.md).
 
 **Git workflow:** main stays linear. Work happens on a branch per feature
 (`feature/<name>`, `fix/<name>`); when it is done, its commits are tidied up,
@@ -411,6 +422,11 @@ In the installed app, the command line is the app binary with arguments, e.g.
 - [RetroGamesNexus](https://retrogamesnexus.com) – fallback covers, e.g. for ROM hacks
 - [FlashGBX](https://github.com/lesserkuma/FlashGBX) – database of verified Game Boy dumps
 - [Project_CTR](https://github.com/3DSGuy/Project_CTR), [3ds-bannertool](https://github.com/carstene1ns/3ds-bannertool)
+- [devkitPro](https://devkitpro.org) – devkitARM, libctru and citro2d for vcinject Link
+- [Luma3DS](https://github.com/LumaTeam/Luma3DS) – the process information vcinject Link reads
+- [3DSort](https://github.com/SalustLab/3DSort), [Checkpoint](https://github.com/BernardoGiordano/Checkpoint),
+  [Cthulhu](https://github.com/Ryuzaki-MrL/Cthulhu), [GodMode9](https://github.com/d0k3/GodMode9) –
+  references for the HOME Menu save files, save data access and scripting (no code taken)
 
 ## Legal
 

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "vcinject"
 version = "0.1.0"
-description = "3DS Virtual Console injector (NSUI alternative) for macOS, Windows and Linux"
+description = "3DS Virtual Console injector for macOS, Windows and Linux – installs over Wi-Fi and manages your 3DS with vcinject Link"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Yanik Fuchs" }]
