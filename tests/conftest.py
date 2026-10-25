@@ -17,6 +17,11 @@ def no_network(monkeypatch, tmp_path):
 
     monkeypatch.setattr(artwork, "_download", offline)
     monkeypatch.setattr(artwork, "conditional_get", offline)
+    try:  # the GUI looks for 3DSs on the network by itself
+        from vcinject.gui import wifi_install
+        monkeypatch.setattr(wifi_install.ConsoleWatcher, "refresh", lambda self: None)
+    except ImportError:
+        pass
     yield
     _finish_library_threads()
 

@@ -281,7 +281,9 @@ vcinject ships a small 3DS app, **vcinject Link**. Install it once
 (`vcinject 3ds setup` shows a QR code for FBI) and start it from the HOME
 Menu: vcinject then finds the 3DS in the same Wi-Fi and can list what is
 installed, install CIAs directly (no FBI or QR code needed), delete titles
-and restart the 3DS.
+and restart the 3DS. Wherever vcinject offers *Install via QR*, an *Install on
+<3DS>* button appears as soon as a 3DS runs vcinject Link (with several: one
+of them or all); double-clicking a game in the library installs it that way.
 
 ```sh
 vcinject 3ds setup                 # install vcinject Link by QR code

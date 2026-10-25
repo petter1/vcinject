@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (QDialog, QFrame, QGridLayout, QLabel, QPushButton
 
 from .. import forwarder, homebrew, systems
 from ..errors import InjectError
+from . import wifi_install
 
 REQUIREMENTS_HTML = """
 <p><b>Every inject</b> needs a 3DS with <a href="https://3ds.hacks.guide">Luma3DS</a>
@@ -33,6 +34,8 @@ class HomebrewDialog(QDialog):
     main window's QR panel."""
     _looked_up = Signal(str, object, str)    # app key, Release or None, error
     _downloaded = Signal(str, object, str)   # app key, Path or None, error
+    _installed = Signal(str, str)            # app key, what happened
+    _installing = Signal(str, str)           # app key, progress text
 
     def __init__(self, main):
         super().__init__(main)
@@ -52,6 +55,7 @@ class HomebrewDialog(QDialog):
         grid.setColumnStretch(0, 1)
         self.info: dict[str, QLabel] = {}
         self.buttons: dict[str, QPushButton] = {}
+        self.wifi_buttons: dict[str, wifi_install.WifiInstallButton] = {}
         for row, app in enumerate(homebrew.CATALOG):
             text = QLabel(f"<b>{app.name}</b> <span style='color:gray'>· "
                           f"<a href='https://github.com/{app.repo}'>{app.repo}</a></span><br>"
@@ -61,12 +65,20 @@ class HomebrewDialog(QDialog):
             info = QLabel("Looking up the newest version…", objectName="muted")
             button = QPushButton("Install via QR", enabled=False)
             button.clicked.connect(lambda _=False, key=app.key: self.install(key))
+            wifi = wifi_install.WifiInstallButton(object_name="")
+            wifi.setEnabled(False)  # once the release and its licence are known
+            wifi.install.connect(lambda consoles, key=app.key: self.install_over_wifi(key, consoles))
             self.info[app.key], self.buttons[app.key] = info, button
+            self.wifi_buttons[app.key] = wifi
             box = QVBoxLayout()
             box.addWidget(text)
             box.addWidget(info)
             grid.addLayout(box, row * 2, 0)
-            grid.addWidget(button, row * 2, 1, alignment=Qt.AlignTop)
+            buttons = QVBoxLayout()
+            buttons.addWidget(button)
+            buttons.addWidget(wifi)
+            buttons.addStretch(1)
+            grid.addLayout(buttons, row * 2, 1)
             line = QFrame(frameShape=QFrame.HLine)
             line.setStyleSheet("color: palette(midlight)")
             grid.addWidget(line, row * 2 + 1, 0, 1, 2)
@@ -81,6 +93,9 @@ class HomebrewDialog(QDialog):
 
         self._looked_up.connect(self._show_release)
         self._downloaded.connect(self._serve)
+        self._installed.connect(lambda key, text: (self.info[key].setText(text),
+                                                   self.wifi_buttons[key].setEnabled(True)))
+        self._installing.connect(lambda key, text: self.info[key].setText(text))
         for app in homebrew.CATALOG:
             threading.Thread(target=self._look_up, args=(app,), daemon=True).start()
 
@@ -97,6 +112,7 @@ class HomebrewDialog(QDialog):
             return
         info.setText(f"{found.tag} · {found.size / 1024 / 1024:.1f} MiB · licence {found.licence}")
         button.setEnabled(found.allowed)
+        self.wifi_buttons[key].setEnabled(found.allowed)
         if not found.allowed:
             button.setToolTip("No open-source licence: get it from the author's page")
 
@@ -110,6 +126,26 @@ class HomebrewDialog(QDialog):
                 self._downloaded.emit(key, homebrew.download(homebrew.APPS[key]), "")
             except (InjectError, OSError) as exc:
                 self._downloaded.emit(key, None, str(exc))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def install_over_wifi(self, key: str, consoles: list):
+        """Downloads the app and installs it on ``consoles`` over Wi-Fi."""
+        app = homebrew.APPS[key]
+        self.wifi_buttons[key].setEnabled(False)
+        self.info[key].setText(f"Downloading {app.name}…")
+
+        def progress(text, sent, total):
+            self._installing.emit(key, f"Installing on {text.split('→')[-1].strip()}: "
+                                       f"{sent * 100 // max(total, 1)} %")
+
+        def work():
+            try:
+                path = homebrew.download(app)
+                results = wifi_install.install(consoles, [path], progress)
+                self._installed.emit(key, " · ".join(results))
+            except (InjectError, OSError) as exc:
+                self._installed.emit(key, f"Failed: {exc}")
 
         threading.Thread(target=work, daemon=True).start()
 

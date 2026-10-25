@@ -384,3 +384,49 @@ def test_after_a_restart_the_outcome_is_checked(tmp_path, monkeypatch):
         if not window._busy:
             break
         QtCore.QThread.msleep(10)
+
+
+def test_wifi_install_button_follows_the_3dss(tmp_path, monkeypatch):
+    monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path))
+    from vcinject import remote
+    from vcinject.gui.wifi_install import ConsoleWatcher, WifiInstallButton
+
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    watcher = ConsoleWatcher()
+    button = WifiInstallButton(watcher)
+    chosen = []
+    button.install.connect(chosen.append)
+    assert button.isHidden()                                   # no 3DS: no button
+
+    petter = remote.Console("192.168.1.150", info={"name": "Petter1", "id": "022BBA8F"})
+    watcher._update([petter])
+    assert not button.isHidden() and button.text() == "Install on Petter1"
+    button.click()
+    assert chosen == [[petter]]
+
+    other = remote.Console("192.168.1.151", info={"name": "Annas 3DS", "id": "11111111"})
+    watcher._update([petter, other])
+    assert button.text() == "Install on 3DS (2)"
+    actions = {a.text(): a for a in button.menu().actions()}
+    actions["All 2"].trigger()
+    assert chosen[-1] == [other, petter]                       # sorted by name
+
+
+def test_wifi_install_reports_each_3ds(tmp_path, monkeypatch):
+    monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path))
+    from test_remote import Fake3DS
+    from vcinject import remote
+    from vcinject.gui import wifi_install
+
+    fake = Fake3DS()
+    cia = tmp_path / "Golden Sun.cia"
+    cia.write_bytes(b"\x01" * 4096)
+    here = remote.Console("127.0.0.1", fake.port, {"name": "Petter1"})
+    with __import__("socket").socket() as unused:
+        unused.bind(("127.0.0.1", 0))
+        gone = remote.Console("127.0.0.1", unused.getsockname()[1], {"name": "Gone"})
+    seen = []
+    results = wifi_install.install([here, gone], [cia], lambda text, sent, total: seen.append(text))
+    assert results[0] == "Petter1: installed" and results[1].startswith("Gone: Could not connect")
+    assert fake.installed == [(remote.MEDIA_SD, cia.read_bytes())]
+    assert seen and seen[-1] == "Golden Sun → Petter1"

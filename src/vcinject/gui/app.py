@@ -9,11 +9,11 @@ from pathlib import Path
 try:
     from PySide6.QtCore import (QLocale, QObject, QPointF, QRectF, QSize, Qt, QThread, QTimer,
                                 QUrl, Signal)
-    from PySide6.QtGui import (QColor, QDesktopServices, QFont, QFontDatabase, QImage, QLinearGradient, QPainter,
+    from PySide6.QtGui import (QColor, QCursor, QDesktopServices, QFont, QFontDatabase, QImage, QLinearGradient, QPainter,
                                QPainterPath, QPen, QPixmap, QPolygonF, QTransform)
     from PySide6.QtWidgets import (
         QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame,
-        QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
+        QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
         QProgressBar, QPushButton, QSlider, QToolButton, QVBoxLayout, QWidget,
     )
 except ImportError:  # pragma: no cover - reported to the user at startup
@@ -30,6 +30,7 @@ from ..builder import (GBA_3D, GbaInjectOptions, default_product_code,
 from ..errors import InjectError, MissingResource
 from . import coversync
 from .libraryview import LibraryPanel, LibraryWindow, VersionsDialog, open_game_page
+from .wifi_install import WifiInstallButton
 from .qtutil import gui_settings, to_pixmap, to_qimage  # noqa: F401 (gui_settings re-exported)
 
 ROM_FILTER = systems.rom_filter()
@@ -552,7 +553,9 @@ class MainWindow(QMainWindow):
         self.last_output: Path | None = None
         self._busy = False
         self._qr_after_build = False
-        self._qr_when_ready = False
+        self._wifi_after_build: list | None = None  # the 3DSs to install on once built
+        self._qr_when_ready = None  # what to do once the ROM's artwork is in (install it)
+        self._announce = False  # show the success message of the running task in a dialog
         self._lookup_id = 0
         self._art_timer = QTimer(self, singleShot=True, interval=250, timeout=self.refresh_art)
 
@@ -682,9 +685,13 @@ class MainWindow(QMainWindow):
                                      clicked=self.install_via_qr)
         self.qr_button.setToolTip("Build the CIA with the current settings and show a QR "
                                   "code for FBI's remote install")
+        self.wifi_button = WifiInstallButton()
+        self.wifi_button.install.connect(self.install_over_wifi)
+        self._wifi_progress.connect(self._show_wifi_progress)
         actions = QHBoxLayout()
         actions.addWidget(self.build_button, 2)
         actions.addWidget(self.qr_button, 1)
+        actions.addWidget(self.wifi_button, 1)
         self.build_progress = QProgressBar()  # steps of a build, shown while building
         self.build_progress.setRange(0, 100)
         self.build_progress.setVisible(False)
@@ -916,18 +923,32 @@ class MainWindow(QMainWindow):
         self.library_window.activateWindow()
 
     def install_from_library(self, path: Path):
-        """Double-click in the library: open the ROM, then build and show the QR code
-        as soon as its artwork has been looked up."""
+        """Double-click in the library: open the ROM, then build and install it as soon as
+        its artwork has been looked up – over Wi-Fi when a 3DS runs vcinject Link (asking
+        which one when several do), else by QR code."""
+        consoles = self.wifi_button.consoles
+        if len(consoles) > 1:
+            menu = QMenu(self)
+            for console in consoles:
+                menu.addAction(f"Install on {console.name}", lambda c=console: self._install_rom(path, [c]))
+            menu.addAction(f"Install on all {len(consoles)}", lambda: self._install_rom(path, consoles))
+            menu.addAction("Install via QR", lambda: self._install_rom(path, None))
+            menu.exec(QCursor.pos())
+        else:
+            self._install_rom(path, consoles or None)
+
+    def _install_rom(self, path: Path, consoles: list | None):
+        install = (lambda: self.install_over_wifi(consoles)) if consoles else self.install_via_qr
         if self.rom_path != Path(path):
             self.load_rom(Path(path))
-            self._qr_when_ready = True
+            self._qr_when_ready = install
         else:
-            self.install_via_qr()
+            install()
 
     def load_rom(self, path: Path):
         if self.rom_path is not None and Path(path) == self.rom_path and not self._busy:
             return  # already open: keep the user's edits
-        self._qr_when_ready = False
+        self._qr_when_ready = None
         try:
             system, rom = builder.load_rom(path)
         except (OSError, InjectError) as exc:
@@ -986,8 +1007,8 @@ class MainWindow(QMainWindow):
             self.drop.release.setText("Artwork lookup failed (offline?)")
             self.art_status.setText(error)
             if self._qr_when_ready:
-                self._qr_when_ready = False
-                QTimer.singleShot(0, self.install_via_qr)
+                then, self._qr_when_ready = self._qr_when_ready, None
+                QTimer.singleShot(0, then)
             return
         self.found = result
         if result.match:
@@ -1016,8 +1037,8 @@ class MainWindow(QMainWindow):
         self._find_nexus_page()
         self._apply_artwork()
         if self._qr_when_ready:
-            self._qr_when_ready = False
-            QTimer.singleShot(0, self.install_via_qr)
+            then, self._qr_when_ready = self._qr_when_ready, None
+            QTimer.singleShot(0, then)
 
     def _apply_artwork(self):
         self.icon_picker.set_available(artwork.available(artwork.ICON_STYLES, self.found))
@@ -1339,7 +1360,7 @@ class MainWindow(QMainWindow):
         if self._busy:
             return
         self._busy = True
-        for button in (self.build_button, self.qr_button, self.template_button):
+        for button in (self.build_button, self.qr_button, self.wifi_button, self.template_button):
             button.setEnabled(False)
         self.build_button.setText("Building…" if success_message is None else "Working…")
         self._building = success_message is None
@@ -1375,7 +1396,7 @@ class MainWindow(QMainWindow):
     def _done(self, result, error: str, success_message: str | None):
         self._busy = False
         self.build_progress.setVisible(False)
-        for button in (self.build_button, self.qr_button, self.template_button):
+        for button in (self.build_button, self.qr_button, self.wifi_button, self.template_button):
             button.setEnabled(True)
         self.build_button.setText("Build CIA")
         self.refresh_status()
@@ -1383,17 +1404,25 @@ class MainWindow(QMainWindow):
             self.log_view.appendPlainText(f"Missing: {error}")
             self.heal_and_retry(result)
         elif error:
+            self._wifi_after_build = None
+            self._announce = False
             self.log_view.appendPlainText(f"Error: {error}")
             QMessageBox.critical(self, "Failed", error)
         elif success_message:
             self.log_view.appendPlainText(success_message)
+            if self._announce:
+                self._announce = False
+                QMessageBox.information(self, "Installed", success_message)
             after, self._after_heal = getattr(self, "_after_heal", None), None
             if after:
                 QTimer.singleShot(0, after)
         elif result is not None:
             self.last_output = result.output_path
             self.library.refresh_rom(self.rom_path)
-            if self._qr_after_build:
+            if self._wifi_after_build:
+                consoles, self._wifi_after_build = self._wifi_after_build, None
+                self._install_paths(consoles, [result.output_path])
+            elif self._qr_after_build:
                 self.show_qr(result.output_path)
             else:
                 QMessageBox.information(self, "Done", f"Created {result.output_path}")
@@ -1406,6 +1435,40 @@ class MainWindow(QMainWindow):
         chosen, _ = QFileDialog.getOpenFileName(self, "Select CIA to install", "", "CIA (*.cia)")
         if chosen:
             self.show_qr(Path(chosen))
+
+    def install_over_wifi(self, consoles: list):
+        """Build with the current settings, then install on ``consoles`` over Wi-Fi."""
+        if self.rom_path is not None:
+            self._wifi_after_build = consoles
+            self.build()
+            return
+        chosen, _ = QFileDialog.getOpenFileNames(self, "Select CIAs to install", "", "CIA (*.cia)")
+        if chosen:
+            self._install_paths(consoles, [Path(p) for p in chosen])
+
+    _wifi_progress = Signal(str, int, int)
+
+    def _install_paths(self, consoles: list, paths: list[Path]):
+        from . import wifi_install
+        names = ", ".join(c.name for c in consoles)
+
+        def run(log):
+            results = wifi_install.install(consoles, paths, self._wifi_progress.emit)
+            for line in results:
+                log(line)
+            if not any(line.endswith(": installed") for line in results):
+                raise InjectError("\n".join(results))
+            return results
+
+        self._announce = True
+        self._run(run, f"Installed on {names}. Press HOME on the 3DS to see it.")
+        self.build_progress.setVisible(True)
+        self.build_progress.setFormat(f"Installing on {names}…")
+
+    def _show_wifi_progress(self, text: str, sent: int, total: int):
+        self.build_progress.setVisible(True)
+        self.build_progress.setValue(sent * 100 // max(total, 1))
+        self.build_progress.setFormat(f"Installing {text}  %p%")
 
     def show_qr(self, path: Path):
         try:
