@@ -65,6 +65,8 @@ def freeze() -> Path:
             "--osx-bundle-identifier", APP_ID]
     for tool in tools:
         args += ["--add-binary", f"{tool}{os.pathsep}bin"]
+    # vcinject Link, the app for the 3DS (scripts/build-companion.sh)
+    args += ["--add-data", f"{ROOT / 'src' / 'vcinject' / 'data'}{os.pathsep}vcinject/data"]
     for module in EXCLUDES:
         args += ["--exclude-module", module]
     run(*args, ROOT / "packaging" / "vcinject_app.py")

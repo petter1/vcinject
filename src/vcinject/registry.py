@@ -113,13 +113,13 @@ def record(entry: Entry) -> None:
     _save(entries)
 
 
-def import_title_ids(title_ids: set[int]) -> int:
+def import_title_ids(title_ids: set[int], label: str = "(installed on 3DS)") -> int:
     """Register IDs that are taken on the console; returns how many were new."""
     entries = load()
     now = time.time()
     added = 0
     for title_id in sorted(title_ids - entries.keys()):
-        entries[title_id] = Entry(title_id=title_id, title="(installed on 3DS)", rom_sha1="",
+        entries[title_id] = Entry(title_id=title_id, title=label, rom_sha1="",
                                   rom_name="", product_code="", save_type="", output="",
                                   built_at=now, source="tickets")
         added += 1

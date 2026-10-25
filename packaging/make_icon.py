@@ -14,7 +14,7 @@ def font(size):
     return ImageFont.load_default(size=size)
 
 
-def draw(size=1024):
+def draw(size=1024, label="INJECT"):
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     pad = size // 10
     shadow = Image.new("RGBA", img.size, (0, 0, 0, 0))
@@ -40,7 +40,7 @@ def draw(size=1024):
     f = font(int(size * 0.13))
     d.text((size / 2, size * 0.355), "Virtual", font=f, fill="white", anchor="mm")
     d.text((size / 2, size * 0.465), "Console", font=f, fill="white", anchor="mm")
-    d.text((size / 2, size * 0.75), "INJECT", font=font(int(size * 0.1)), fill=(235, 230, 255, 255),
+    d.text((size / 2, size * 0.75), label, font=font(int(size * 0.1)), fill=(235, 230, 255, 255),
            anchor="mm")
     return img
 

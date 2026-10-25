@@ -38,6 +38,43 @@ def build_smdh(short_title: str, long_title: str, publisher: str, icon: Image.Im
     return bytes(out)
 
 
+LANGUAGES = ("ja", "en", "fr", "de", "it", "es", "zh", "ko", "nl", "pt", "ru", "zh-tw")
+
+
+def read_titles(smdh: bytes, language: str = "en") -> tuple[str, str, str]:
+    """Short title, long title and publisher; English when ``language`` has none."""
+    if len(smdh) < SMDH_SIZE or smdh[:4] != b"SMDH":
+        raise InjectError("Not an SMDH.")
+
+    def entry(index: int) -> tuple[str, str, str]:
+        base = 0x8 + index * 0x200
+        fields = ((base, _SHORT_LEN), (base + 0x80, _LONG_LEN), (base + 0x180, _PUBLISHER_LEN))
+        return tuple(smdh[start:start + units * 2].decode("utf-16-le", "replace").split("\0", 1)[0]
+                     .strip() for start, units in fields)
+
+    index = LANGUAGES.index(language) if language in LANGUAGES else 1
+    found = entry(index)
+    return found if found[0] else entry(1)
+
+
+def read_icon(smdh: bytes, size: int = 48) -> Image.Image:
+    """The large (48) or small (24) icon of an SMDH."""
+    start = 0x24C0 if size == 48 else 0x2040
+    img = Image.new("RGB", (size, size))
+    px = img.load()
+    pos = start
+    for tile_y in range(0, size, 8):
+        for tile_x in range(0, size, 8):
+            for i in range(64):
+                x, y = _morton_xy(i)
+                value = struct.unpack_from("<H", smdh, pos)[0]
+                pos += 2
+                r, g, b = value >> 11, (value >> 5) & 0x3F, value & 0x1F
+                px[tile_x + x, tile_y + y] = ((r << 3) | (r >> 2), (g << 2) | (g >> 4),
+                                              (b << 3) | (b >> 2))
+    return img
+
+
 def _utf16(text: str, units: int, field: str) -> bytes:
     raw = text.encode("utf-16-le")
     if len(raw) > (units - 1) * 2:

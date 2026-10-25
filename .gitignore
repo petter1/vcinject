@@ -5,8 +5,13 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 *.cia
+!/src/vcinject/data/vcinject-link.cia
 *.cxi
 *.gba
 .DS_Store
 /Ressources/
 /dist/
+/companion/build/
+/companion/*.3dsx
+/companion/*.elf
+/companion/*.smdh

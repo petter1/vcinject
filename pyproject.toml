@@ -34,5 +34,8 @@ vcinject-gui = "vcinject.gui.app:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+vcinject = ["data/*.cia"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

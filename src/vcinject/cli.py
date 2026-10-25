@@ -6,8 +6,8 @@ import sys
 import time
 from pathlib import Path
 
-from . import (__version__, artwork, backup, forwarder, gba, gbvc, health, homebrew, library, registry, serve,
-               systems, template, tickets, tools, vcbanner)
+from . import (__version__, artwork, backup, forwarder, gba, gbvc, health, homebrew, library, registry, remote,
+               serve, smdh, systems, template, tickets, tools, vcbanner)
 from .builder import GbaInjectOptions, build, parse_title_id
 from .errors import InjectError, MissingResource
 
@@ -130,6 +130,14 @@ def build_parser() -> argparse.ArgumentParser:
     f = sub.add_parser("forget", help="remove a title ID from the local register")
     f.add_argument("title_id", type=_title_id)
 
+    c = sub.add_parser("3ds", help="manage a 3DS running vcinject Link over Wi-Fi")
+    c.add_argument("--console", metavar="IP", help="the 3DS's address (default: search the network)")
+    c.add_argument("action", choices=["setup", "find", "titles", "install", "delete", "restart-app",
+                                       "reboot"],
+                   help="setup: install vcinject Link by QR code; find: list 3DSs; titles: what is "
+                        "installed; install <cia>...; delete <title ID>...; reboot")
+    c.add_argument("items", nargs="*", help=".cia files or title IDs")
+    _add_serve_options(c)
     sub.add_parser("info", help="show tool and template status")
     t = sub.add_parser("templates", help="back up or restore all templates as one file")
     t.add_argument("action", choices=["export", "import"])
@@ -380,6 +388,69 @@ def cmd_homebrew(args: argparse.Namespace) -> int:
     return 0
 
 
+def _console(args: argparse.Namespace) -> remote.Console:
+    found = remote.discover(hosts=[args.console] if args.console else None)
+    if not found:
+        raise InjectError("No 3DS found. Start vcinject Link on it (same Wi-Fi), or pass "
+                          "--console <IP> (shown in vcinject Link). Install it with "
+                          "'vcinject 3ds setup'.")
+    if len(found) > 1:
+        raise InjectError("Several 3DSs found; choose one with --console: "
+                          + ", ".join(f"{c.host} ({c.name})" for c in found))
+    if found[0].outdated:
+        print("vcinject Link on this 3DS is outdated: update it with 'vcinject 3ds setup'.",
+              file=sys.stderr)
+    return found[0]
+
+
+def cmd_3ds(args: argparse.Namespace) -> int:
+    if args.action == "setup":
+        print("Installs vcinject Link with FBI; afterwards start it from the HOME Menu.")
+        return _serve([remote.CIA], args.host, args.port)
+    if args.action == "find":
+        found = remote.discover(hosts=[args.console] if args.console else None)
+        for console in found:
+            info = console.info
+            print(f"{console.host}  {console.name}  (ID {console.key})  system {info.get('system', '?')}, "
+                  f"{int(info.get('sd_free', 0)) / 2**30:.1f} GiB free on the SD card"
+                  + ("  – vcinject Link outdated, update: vcinject 3ds setup" if console.outdated else ""))
+        if not found:
+            print("No 3DS found. Is vcinject Link open on it, in the same Wi-Fi?")
+        return 0 if found else 1
+    console = _console(args)
+    with remote.Link(console.host, console.port) as link:
+        if args.action == "titles":
+            media = {remote.MEDIA_SD: "SD", remote.MEDIA_NAND: "NAND", remote.MEDIA_GAME_CARD: "card"}
+            titles = link.all_titles()
+            remote.reserve_title_ids(console, titles)
+            for title in titles:
+                if not title.is_app:
+                    continue
+                data = link.cached_smdh(title, console)
+                name = smdh.read_titles(data)[0] if data else "?"
+                print(f"{title.id:016X}  {media[title.media]:4}  v{title.version:<5} "
+                      f"{title.size / 2**20:7.1f} MiB  {title.product_code:12} {name}")
+        elif args.action == "install":
+            for path in args.items:
+                def progress(sent: int, total: int, name=Path(path).name) -> None:
+                    print(f"\r{name}: {sent * 100 // max(total, 1)} %", end="", flush=True)
+                link.install(Path(path), progress=progress)
+                print(" – installed")
+        elif args.action == "delete":
+            installed = {t.id: t for t in link.all_titles()}
+            for item in args.items:
+                title = installed.get(_title_id(item))
+                if title is None:
+                    raise InjectError(f"{item} is not installed.")
+                link.delete(title)
+                print(f"Deleted {title.id:016X}")
+        elif args.action == "restart-app":
+            link.restart_app()
+        elif args.action == "reboot":
+            link.reboot()
+    return 0
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     roms = []
     for path in args.paths:
@@ -423,7 +494,7 @@ def cmd_gui(_args: argparse.Namespace) -> int:
 COMMANDS = {"gba": cmd_gba, "build": cmd_gba, "serve": cmd_serve, "setup": cmd_setup,
             "list": cmd_list, "library": cmd_library, "verify": cmd_verify, "homebrew": cmd_homebrew, "forget": cmd_forget, "doctor": cmd_doctor,
             "templates": cmd_templates, "import-tickets": cmd_import_tickets, "info": cmd_info,
-            "save-types": cmd_save_types, "gui": cmd_gui}
+            "save-types": cmd_save_types, "gui": cmd_gui, "3ds": cmd_3ds}
 
 
 def main(argv: list[str] | None = None) -> int:
