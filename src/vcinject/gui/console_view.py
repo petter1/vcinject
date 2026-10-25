@@ -10,7 +10,8 @@ from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QComboBox, QDialog, QFileDialog, QFrame,
                                QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListView,
                                QListWidget, QListWidgetItem, QMenu, QMessageBox, QProgressBar,
-                               QPushButton, QScrollArea, QSpinBox, QTabWidget, QVBoxLayout, QWidget)
+                               QPushButton, QScrollArea, QSpinBox, QStackedWidget, QTabWidget,
+                               QVBoxLayout, QWidget)
 
 from .. import homemenu, installed, registry, remote, saves, smdh, status
 from ..errors import InjectError
@@ -415,6 +416,104 @@ class MirrorPanel(QFrame):
         self.log.setText("<br>".join(self._lines))
 
 
+# --- the 3DSs, one card each ----------------------------------------------------------
+
+class DevicesPage(QWidget):
+    """Every 3DS vcinject knows: online ones from the watcher, others as last seen."""
+    chosen = Signal(object)    # remote.Console
+    add = Signal()
+
+    def __init__(self):
+        super().__init__()
+        from .wifi_install import ConsoleWatcher
+        self.watcher = ConsoleWatcher.shared()
+        title = QLabel("My 3DS", objectName="pageTitle")
+        self.hint = QLabel(objectName="muted")
+        head = QHBoxLayout()
+        head.addWidget(title)
+        head.addSpacing(12)
+        head.addWidget(self.hint, 1)
+        self.cards = QGridLayout()
+        self.cards.setSpacing(16)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.addLayout(head)
+        layout.addLayout(self.cards)
+        layout.addStretch(1)
+        self.watcher.changed.connect(lambda _consoles: self.refresh())
+        self.refresh()
+
+    def refresh(self):
+        while self.cards.count():
+            widget = self.cards.takeAt(0).widget()
+            if widget:
+                widget.deleteLater()
+        online = self.watcher.consoles
+        self.hint.setText("Found in your Wi-Fi by vcinject Link" if online else
+                          "No 3DS found yet – start vcinject Link on it, in the same Wi-Fi")
+        known = {c.key: c.label for c in installed.known_consoles()}
+        offline = [(key, label) for key, label in known.items() if key not in {c.key for c in online}]
+        cards = [self._card(c) for c in online] + [self._offline_card(label) for _key, label in offline]
+        cards.append(self._add_card())
+        for index, card in enumerate(cards):
+            self.cards.addWidget(card, index // 3, index % 3)
+
+    def _card(self, console: remote.Console) -> QFrame:
+        info = console.info
+        frame = QFrame(objectName="card")
+        box = QVBoxLayout(frame)
+        box.setContentsMargins(18, 16, 18, 16)
+        name = QLabel(f"<span style='font-size:17px; font-weight:700'>{console.name}</span><br>"
+                      f"<span style='color:gray'>{console.model} · {console.host}</span>")
+        state = QLabel("<span style='color:#1E9E5A'>●</span> Online")
+        top = QHBoxLayout()
+        top.addWidget(name, 1)
+        top.addWidget(state, alignment=Qt.AlignTop)
+        box.addLayout(top)
+        free, total = int(info.get("sd_free", 0)), int(info.get("sd_total", 0))
+        facts = QLabel("<table cellspacing=3>" + "".join(
+            f"<tr><td style='color:gray'>{k}</td><td>&nbsp;{v}</td></tr>" for k, v in (
+                ("System", info.get("system", "?")), ("Luma3DS", info.get("luma") or "?"),
+                ("vcinject Link", info.get("version", "?")),
+                ("SD card", f"{free / 1e9:.1f} of {total / 1e9:.0f} GB free" if total else "?"))) + "</table>")
+        box.addWidget(facts)
+        if total:
+            bar = QProgressBar(textVisible=False, maximumHeight=8)
+            bar.setRange(0, 100)
+            bar.setValue(int((total - free) * 100 / total))
+            box.addWidget(bar)
+        if console.outdated:
+            box.addWidget(QLabel("<span style='color:#b45309'>vcinject Link can be updated</span>"))
+        open_ = QPushButton("Open", objectName="primary")
+        open_.clicked.connect(lambda: self.chosen.emit(console))
+        box.addWidget(open_)
+        return frame
+
+    def _offline_card(self, label: str) -> QFrame:
+        frame = QFrame(objectName="card")
+        box = QVBoxLayout(frame)
+        box.setContentsMargins(18, 16, 18, 16)
+        box.addWidget(QLabel(f"<span style='font-size:17px; font-weight:700'>{label}</span>"))
+        box.addWidget(QLabel("<span style='color:gray'>●</span> Not online – start vcinject Link on it",
+                             wordWrap=True))
+        box.addStretch(1)
+        return frame
+
+    def _add_card(self) -> QFrame:
+        frame = QFrame(objectName="card")
+        frame.setStyleSheet("QFrame#card { border-style: dashed; }")
+        box = QVBoxLayout(frame)
+        box.setContentsMargins(18, 16, 18, 16)
+        box.addWidget(QLabel("<span style='font-size:17px; font-weight:700'>Add a 3DS</span>"))
+        box.addWidget(QLabel("1. Install vcinject Link with FBI (QR code)<br>2. Open it from the HOME Menu"
+                             "<br>3. It shows up here by itself", wordWrap=True))
+        button = QPushButton("Show QR code", objectName="secondary")
+        button.clicked.connect(self.add.emit)
+        box.addStretch(1)
+        box.addWidget(button)
+        return frame
+
+
 # --- the window -----------------------------------------------------------------
 
 class ConsoleWindow(QDialog):
@@ -461,15 +560,26 @@ class ConsoleWindow(QDialog):
         self._icons_arrived.connect(self._add_icons)
         self._needs_3ds = [search, by_ip]
 
-        layout = QVBoxLayout(self)
-        layout.addLayout(top)
-        layout.addWidget(self.setup_hint)
-        layout.addWidget(self.tabs, 1)
+        back = QPushButton("◀  My 3DS", objectName="link", clicked=self.show_devices)
+        device = QWidget()
+        device_layout = QVBoxLayout(device)
+        device_layout.addWidget(back, alignment=Qt.AlignLeft)
+        device_layout.addLayout(top)
+        device_layout.addWidget(self.setup_hint)
+        device_layout.addWidget(self.tabs, 1)
         bottom = QHBoxLayout()
         bottom.addWidget(self.busy_label)
         bottom.addWidget(self.progress, 1)
-        layout.addLayout(bottom)
-        self.search()
+        device_layout.addLayout(bottom)
+        self.devices = DevicesPage()
+        self.devices.chosen.connect(self.open_device)
+        self.devices.add.connect(self.install_link)
+        self.pages = QStackedWidget()
+        self.pages.addWidget(self.devices)
+        self.pages.addWidget(device)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.pages)
 
     # --- tabs -------------------------------------------------------------------
 
@@ -653,6 +763,15 @@ class ConsoleWindow(QDialog):
                                "<a href='update'>Update now</a>" if self.console.outdated else ""))
 
     # --- connecting ------------------------------------------------------------------
+
+    def show_devices(self):
+        self.pages.setCurrentWidget(self.devices)
+        self.devices.refresh()
+
+    def open_device(self, console: remote.Console):
+        self.pages.setCurrentIndex(1)
+        if self.console is None or self.console.key != console.key:
+            self.connect_to(console)
 
     def search(self):
         self.console = None
@@ -877,7 +996,7 @@ class ConsoleWindow(QDialog):
         be opened on it), loads everything as when connecting, and then shows what
         ``verify(findings, layout)`` -> (ok, message) says about the outcome."""
         import time
-        host = self.console.host if self.console else None
+        key = self.console.key if self.console else None
         self.console = None
         self._verify = verify
         self.mirror.set_state(waiting, "vcinject reconnects by itself as soon as vcinject Link runs "
@@ -886,8 +1005,10 @@ class ConsoleWindow(QDialog):
         given_up = time.monotonic() + patience
 
         def found(consoles, _error):
+            consoles = [c for c in consoles or [] if key is None or c.key == key]  # this 3DS, not another
             if consoles:
                 self.mirror.add_activity("The 3DS is back")
+                self.pages.setCurrentIndex(1)
                 self._found(consoles, "")  # loads it all; check_status then runs the check
             elif time.monotonic() > given_up:
                 self._verify = None

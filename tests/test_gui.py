@@ -290,24 +290,32 @@ def test_home_grid_drag_swaps_and_drops_into_folders(tmp_path, monkeypatch):
     assert len(changes) == 2 and layout.changed
 
 
-def test_my_3ds_window_explains_setup_without_a_console(tmp_path, monkeypatch):
+def test_my_3ds_shows_a_card_per_3ds(tmp_path, monkeypatch):
     monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path))
     from vcinject import remote
     from vcinject.gui import app as gui
+    from vcinject.gui.wifi_install import ConsoleWatcher
 
     monkeypatch.setattr(remote, "discover", lambda *a, **k: [])
     qt = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     window = gui.MainWindow()
     window.console_button.click()
     console = window.console_window
-    for _ in range(100):
-        qt.processEvents()
-        if not console._busy:
-            break
-        QtCore.QThread.msleep(10)
-    assert console.isEnabled()  # never locked while it works
-    assert "No 3DS found" in console.status.text()
-    assert console.setup_hint.isVisibleTo(console) and not console.tabs.isVisibleTo(console)
+    assert console.pages.currentWidget() is console.devices
+    assert "No 3DS found yet" in console.devices.hint.text()
+    texts = [w.text() for w in console.devices.findChildren(QtWidgets.QPushButton)]
+    assert texts == ["Show QR code"]                        # only the Add a 3DS card
+
+    petter = remote.Console("192.168.1.150", info={"name": "Petter1", "id": "022BBA8F", "model": "1",
+                                                   "version": "13", "system": "11.17.0-50E"})
+    opened = []
+    monkeypatch.setattr(console, "connect_to", opened.append)
+    ConsoleWatcher.shared()._update([petter])
+    open_button = next(b for b in console.devices.findChildren(QtWidgets.QPushButton) if b.text() == "Open")
+    open_button.click()
+    assert opened == [petter] and console.pages.currentIndex() == 1
+    ConsoleWatcher.shared()._update([])                     # leave the shared watcher as found
+    ConsoleWatcher.shared()._seen.clear()
     for w in qt.topLevelWidgets():
         w.close()
 
