@@ -419,20 +419,33 @@ class MirrorPanel(QFrame):
 # --- the 3DSs, one card each ----------------------------------------------------------
 
 class DevicesPage(QWidget):
-    """Every 3DS vcinject knows: online ones from the watcher, others as last seen."""
+    """Every 3DS vcinject knows: online ones from the watcher, others as last seen. The
+    status report of each online 3DS is read in the background (at most every
+    CHECK_EVERY seconds, or when Refresh is pressed)."""
     chosen = Signal(object)    # remote.Console
     add = Signal()
+    _checked = Signal(str, object, str)  # console key, findings or None, error
 
-    def __init__(self):
+    CHECK_EVERY = 600
+
+    def __init__(self, busy_with=lambda: None):
         super().__init__()
         from .wifi_install import ConsoleWatcher
         self.watcher = ConsoleWatcher.shared()
+        self.busy_with = busy_with  # key of the console the window has open (left alone)
+        self.reports: dict[str, tuple[float, list | None, str]] = {}
+        self._checking: set[str] = set()
+        self._checked.connect(self._report_arrived)
         title = QLabel("My 3DS", objectName="pageTitle")
         self.hint = QLabel(objectName="muted")
+        refresh = QPushButton("Refresh", objectName="secondary", clicked=lambda: self.check_all(force=True))
+        refresh.setToolTip("Look for 3DSs again and read what is on them")
         head = QHBoxLayout()
         head.addWidget(title)
         head.addSpacing(12)
         head.addWidget(self.hint, 1)
+        head.addWidget(refresh)
+        QTimer(self, interval=60_000, timeout=self.check_all).start()
         self.cards = QGridLayout()
         self.cards.setSpacing(16)
         layout = QVBoxLayout(self)
@@ -440,13 +453,72 @@ class DevicesPage(QWidget):
         layout.addLayout(head)
         layout.addLayout(self.cards)
         layout.addStretch(1)
-        self.watcher.changed.connect(lambda _consoles: self.refresh())
+        self.watcher.changed.connect(lambda _consoles: (self.refresh(), self.check_all()))
         self.refresh()
+        self.check_all()
+
+    def check_all(self, force: bool = False):
+        """Reads the status report of every online 3DS whose report is old (or all)."""
+        import time
+        if force:
+            self.watcher.refresh()
+        for console in self.watcher.consoles:
+            last = self.reports.get(console.key, (0, None, ""))[0]
+            if console.key in self._checking or console.key == self.busy_with():
+                continue
+            if force or time.time() - last > self.CHECK_EVERY:
+                self._check(console)
+        self.refresh()
+
+    def _check(self, console: remote.Console):
+        import threading
+        self._checking.add(console.key)
+
+        def work():
+            try:
+                with remote.Link(console.host, console.port, timeout=30) as link:
+                    console.info.update(link.info())
+                    titles = link.all_titles(product_codes=False)
+                    installed.remember(console, titles)
+                    remote.reserve_title_ids(console, titles)
+                    findings = status.check(link, console, titles)
+                    link.report(status.report_text(findings))
+                self._checked.emit(console.key, findings, "")
+            except (InjectError, OSError) as exc:
+                self._checked.emit(console.key, None, str(exc))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _report_arrived(self, key: str, findings, error: str):
+        import time
+        self._checking.discard(key)
+        self.reports[key] = (time.time(), findings, error)
+        self.refresh()
+        self.watcher.installed_changed.emit()
+
+    def _summary(self, key: str) -> str:
+        if key in self._checking and key not in self.reports:
+            return "<span style='color:gray'>Reading what is on it…</span>"
+        _when, findings, error = self.reports.get(key, (0, None, ""))
+        if findings is None:
+            return f"<span style='color:gray'>{'Could not read it: ' + error if error else 'Not checked yet'}</span>"
+        updates = [f.title for f in findings if f.level == status.UPDATE]
+        warnings = [f.title for f in findings if f.level == status.WARN]
+        if not updates and not warnings:
+            return "<span style='color:#1E9E5A'>✓ Everything up to date</span>"
+        parts = []
+        if updates:
+            parts.append(f"<b>{len(updates)} update{'s' if len(updates) > 1 else ''}</b>: {', '.join(updates[:3])}"
+                         + ("…" if len(updates) > 3 else ""))
+        if warnings:
+            parts.append(f"<b>{len(warnings)} to look at</b>: {', '.join(warnings)}")
+        return "<span style='color:#b45309'>" + "<br>".join(parts) + "</span>"
 
     def refresh(self):
         while self.cards.count():
             widget = self.cards.takeAt(0).widget()
             if widget:
+                widget.setParent(None)  # gone right away, not only at the next event
                 widget.deleteLater()
         online = self.watcher.consoles
         self.hint.setText("Found in your Wi-Fi by vcinject Link" if online else
@@ -482,8 +554,9 @@ class DevicesPage(QWidget):
             bar.setRange(0, 100)
             bar.setValue(int((total - free) * 100 / total))
             box.addWidget(bar)
-        if console.outdated:
-            box.addWidget(QLabel("<span style='color:#b45309'>vcinject Link can be updated</span>"))
+        summary = QLabel(self._summary(console.key), wordWrap=True)
+        summary.setTextFormat(Qt.RichText)
+        box.addWidget(summary)
         open_ = QPushButton("Open", objectName="primary")
         open_.clicked.connect(lambda: self.chosen.emit(console))
         box.addWidget(open_)
@@ -534,7 +607,8 @@ class ConsoleWindow(QDialog):
         self.consoles = QComboBox()
         self.consoles.setVisible(False)
         self.consoles.activated.connect(lambda: self.connect_to(self.consoles.currentData()))
-        search = QPushButton("Search again", clicked=self.search)
+        search = QPushButton("Refresh", clicked=lambda: self.load_titles() if self.console else self.search())
+        search.setToolTip("Read the titles, the status report and the HOME Menu again")
         by_ip = QPushButton("Connect by IP…", clicked=self.connect_by_ip)
         setup = QPushButton("Install vcinject Link…", clicked=self.install_link)
         setup.setToolTip("Shows a QR code: FBI → Remote Install → Scan QR Code")
@@ -571,7 +645,7 @@ class ConsoleWindow(QDialog):
         bottom.addWidget(self.busy_label)
         bottom.addWidget(self.progress, 1)
         device_layout.addLayout(bottom)
-        self.devices = DevicesPage()
+        self.devices = DevicesPage(busy_with=lambda: self.console.key if self.console else None)
         self.devices.chosen.connect(self.open_device)
         self.devices.add.connect(self.install_link)
         self.pages = QStackedWidget()

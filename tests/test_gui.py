@@ -304,7 +304,7 @@ def test_my_3ds_shows_a_card_per_3ds(tmp_path, monkeypatch):
     assert console.pages.currentWidget() is console.devices
     assert "No 3DS found yet" in console.devices.hint.text()
     texts = [w.text() for w in console.devices.findChildren(QtWidgets.QPushButton)]
-    assert texts == ["Show QR code"]                        # only the Add a 3DS card
+    assert sorted(texts) == ["Refresh", "Show QR code"]     # only the Add a 3DS card
 
     petter = remote.Console("192.168.1.150", info={"name": "Petter1", "id": "022BBA8F", "model": "1",
                                                    "version": "13", "system": "11.17.0-50E"})
@@ -454,3 +454,29 @@ def test_wifi_install_reports_each_3ds(tmp_path, monkeypatch):
     assert results[0] == "Petter1: installed" and results[1].startswith("Gone: Could not connect")
     assert fake.installed == [(remote.MEDIA_SD, cia.read_bytes())]
     assert seen and seen[-1] == "Golden Sun → Petter1"
+
+
+def test_missing_games_and_device_summaries(tmp_path, monkeypatch):
+    monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path))
+    from vcinject import library, remote, status, systems
+    from vcinject.gui import app as gui
+    from vcinject.gui.console_view import DevicesPage
+    from vcinject.gui.libraryview import Entry
+
+    monkeypatch.setattr(remote, "discover", lambda *a, **k: [])
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = gui.MainWindow()
+    game = library.CatalogGame("Golden Sun", ["Golden Sun (Europe) (En,Fr,De)"], systems.SYSTEMS["gba"], "2001")
+    window.library.missing_chosen.emit(Entry("missing:gba:gs", "missing", "Golden Sun", game=game))
+    assert window.games.currentWidget() is window.missing_page
+    assert window.missing_page.name.text() == "Golden Sun"
+    assert "Not in your collection" in window.missing_page.state.text()
+    assert "Golden Sun (Europe)" in window.missing_page.releases.text()
+
+    page = DevicesPage()
+    page.reports["A"] = (0, [status.Finding(status.UPDATE, "Checkpoint", "3.7.4 -> 5.3.0"),
+                             status.Finding(status.OK, "System", "11.17")], "")
+    page.reports["B"] = (0, [status.Finding(status.OK, "System", "11.17")], "")
+    assert "1 update" in page._summary("A") and "Checkpoint" in page._summary("A")
+    assert "Everything up to date" in page._summary("B")
+    assert "Not checked yet" in page._summary("C")

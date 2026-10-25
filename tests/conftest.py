@@ -20,6 +20,9 @@ def no_network(monkeypatch, tmp_path):
     try:  # the GUI looks for 3DSs on the network by itself
         from vcinject.gui import wifi_install
         monkeypatch.setattr(wifi_install.ConsoleWatcher, "refresh", lambda self: None)
+        monkeypatch.setattr(wifi_install.ConsoleWatcher, "read_titles", lambda self, *a, **k: None)
+        from vcinject.gui import console_view
+        monkeypatch.setattr(console_view.DevicesPage, "_check", lambda self, console: None)
     except ImportError:
         pass
     yield

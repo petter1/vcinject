@@ -546,6 +546,7 @@ class CoverFlowView(QWidget):
 class LibraryPanel(QFrame):
     """ROM folder (incl. sub folders) with filters and a switchable view."""
     rom_chosen = Signal(object)          # Path
+    missing_chosen = Signal(object)      # Entry of a game not in the folder
     rom_install = Signal(object)         # Path, double-click: build and show the QR code
     open_window = Signal()               # "show the library in its own window"
     rom_renamed = Signal(object, object)  # old Path, new Path
@@ -1325,6 +1326,8 @@ class LibraryPanel(QFrame):
         self._current = entry
         if entry is not None and entry.kind == "rom":
             self._open_timer.start()
+        elif entry is not None and entry.kind == "missing":
+            self.missing_chosen.emit(entry)
 
     def _activated(self, entry: Entry | None):
         if entry is None:

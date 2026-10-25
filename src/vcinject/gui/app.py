@@ -551,6 +551,72 @@ class QrPanel(QFrame):
 
 # --- main window ---------------------------------------------------------------
 
+class MissingGamePage(QWidget):
+    """The page of a game that is not in the ROM folder: cover, releases, where to look."""
+
+    def __init__(self, main: "MainWindow"):
+        super().__init__()
+        self.main = main
+        self.entry = None
+        back = QPushButton("◀  Games", objectName="link", clicked=main.show_gallery)
+        self.cover = QLabel(alignment=Qt.AlignTop | Qt.AlignHCenter)
+        self.cover.setFixedWidth(260)
+        self.name = QLabel(wordWrap=True)
+        self.name.setStyleSheet("font-size: 24px; font-weight: 700;")
+        self.facts = QLabel(wordWrap=True, objectName="muted")
+        self.state = QLabel(wordWrap=True)
+        self.releases = QLabel(wordWrap=True)
+        self.releases.setTextFormat(Qt.RichText)
+        libretro = QPushButton("libretro database ↗", objectName="secondary",
+                               clicked=lambda: self._open("libretro"))
+        nexus = QPushButton("RetroGamesNexus ↗", objectName="secondary",
+                            clicked=lambda: self._open("nexus"))
+        links = QHBoxLayout()
+        links.addWidget(libretro)
+        links.addWidget(nexus)
+        links.addStretch(1)
+        text = QVBoxLayout()
+        text.setSpacing(10)
+        for widget in (self.name, self.facts, self.state, self.releases):
+            text.addWidget(widget)
+        text.addLayout(links)
+        text.addStretch(1)
+        columns = QHBoxLayout()
+        columns.setSpacing(28)
+        columns.addWidget(self.cover)
+        columns.addLayout(text, 1)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(back, alignment=Qt.AlignLeft)
+        layout.addLayout(columns, 1)
+
+    def show_entry(self, entry):
+        self.entry = entry
+        game = entry.game
+        self.cover.setPixmap(self.main.library.icon(entry, QSize(240, 300)))
+        self.name.setText(entry.title)
+        self.facts.setText(" · ".join(p for p in (game.system.name if game else entry.system,
+                                                   (game.year if game else entry.year) or "",
+                                                   entry.series) if p))
+        unreleased = game is not None and game.unreleased
+        self.state.setText("<b>Never released</b> – only betas, prototypes or demos exist."
+                           if unreleased else "<b>Not in your collection.</b> Dump it from your "
+                           "cartridge (e.g. with a GBxCart) and put it into your ROM folder: "
+                           "vcinject then checks it against the known good dump.")
+        if game and game.releases:
+            self.releases.setText("<b>Known releases</b> (No-Intro)<br>"
+                                  + "<br>".join(game.releases[:12])
+                                  + (f"<br>… and {len(game.releases) - 12} more" if len(game.releases) > 12 else ""))
+        else:
+            self.releases.setText("")
+
+    def _open(self, site: str):
+        if self.entry is None or self.entry.game is None:
+            return
+        game = self.entry.game
+        open_game_page(self, site, game.system, game.releases[0] if game.releases else None, game.title)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -769,6 +835,7 @@ class MainWindow(QMainWindow):
         # (on the first start the covers are downloaded before it is shown)
         self.library = LibraryPanel(grid=True, autoload=not coversync.needed())
         self.library.rom_chosen.connect(self.open_game)
+        self.library.missing_chosen.connect(self.open_missing)
         self.library.rom_install.connect(self.install_from_library)
         self.library.rom_renamed.connect(self._rom_renamed)
         self.library.rom_refreshed.connect(self._rom_refreshed)
@@ -777,6 +844,8 @@ class MainWindow(QMainWindow):
         self.games = QStackedWidget()
         self.games.addWidget(self.library)
         self.games.addWidget(self.game_page)
+        self.missing_page = MissingGamePage(self)
+        self.games.addWidget(self.missing_page)
         games_title = QLabel("Games", objectName="pageTitle")
         games_head = QHBoxLayout()
         games_head.addWidget(games_title)
@@ -800,7 +869,7 @@ class MainWindow(QMainWindow):
         sidebar.setFixedWidth(210)
         side = QVBoxLayout(sidebar)
         side.setContentsMargins(12, 18, 12, 14)
-        side.setSpacing(4)
+        side.setSpacing(8)
         brand = QLabel("vcinject", objectName="brand")
         side.addWidget(brand)
         side.addSpacing(14)
@@ -810,6 +879,7 @@ class MainWindow(QMainWindow):
                                ("homebrew", "Homebrew", "Apps for the 3DS, straight from their authors"),
                                ("setup", "Setup", "Everything vcinject needs, as a checklist")):
             button = QPushButton(text, objectName="nav", checkable=True, toolTip=tip)
+            button.setMinimumHeight(38)
             button.clicked.connect(lambda _=False, key=key: self.show_section(key))
             self.nav[key] = button
             side.addWidget(button)
@@ -946,6 +1016,11 @@ class MainWindow(QMainWindow):
         self.load_rom(Path(path))
         if self.rom_path == Path(path):
             self.games.setCurrentWidget(self.game_page)
+
+    def open_missing(self, entry):
+        """A game that is not in the folder: what is known about it."""
+        self.missing_page.show_entry(entry)
+        self.games.setCurrentWidget(self.missing_page)
 
     def install_to_target(self):
         """Build with the current settings and install where 'Install to' says."""
