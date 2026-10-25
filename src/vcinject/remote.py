@@ -49,6 +49,10 @@ class RemoteError(InjectError):
         super().__init__(f"{what}: {reason}.")
 
 
+# CFGU_GetSystemModel
+_MODELS = {"0": "3DS", "1": "3DS XL", "2": "New 3DS", "3": "2DS", "4": "New 3DS XL", "5": "New 2DS XL"}
+
+
 @dataclass
 class Console:
     """A 3DS running vcinject Link."""
@@ -59,6 +63,15 @@ class Console:
     @property
     def name(self) -> str:
         return self.info.get("name") or self.host
+
+    @property
+    def model(self) -> str:
+        return _MODELS.get(self.info.get("model", ""), "3DS")
+
+    @property
+    def label(self) -> str:
+        """Name and model, e.g. "Petter1 (3DS XL)": names alone are often alike."""
+        return f"{self.name} ({self.model})"
 
     @property
     def region(self) -> int:

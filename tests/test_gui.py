@@ -398,9 +398,9 @@ def test_wifi_install_button_follows_the_3dss(tmp_path, monkeypatch):
     button.install.connect(chosen.append)
     assert button.isHidden()                                   # no 3DS: no button
 
-    petter = remote.Console("192.168.1.150", info={"name": "Petter1", "id": "022BBA8F"})
+    petter = remote.Console("192.168.1.150", info={"name": "Petter1", "id": "022BBA8F", "model": "1"})
     watcher._update([petter])
-    assert not button.isHidden() and button.text() == "Install on Petter1"
+    assert not button.isHidden() and button.text() == "Install on Petter1 (3DS XL)"
     button.click()
     assert chosen == [[petter]]
 

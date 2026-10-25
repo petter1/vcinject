@@ -75,14 +75,14 @@ class WifiInstallButton(QToolButton):
         self.consoles = consoles
         self.setVisible(bool(consoles))
         if len(consoles) == 1:
-            self.setText(f"Install on {consoles[0].name}")
+            self.setText(f"Install on {consoles[0].label}")
             self.setPopupMode(QToolButton.DelayedPopup)
             self.setMenu(None)
             return
         self.setText(f"Install on 3DS ({len(consoles)})")
         menu = QMenu(self)
         for console in consoles:
-            menu.addAction(f"{console.name}  ({console.host})", lambda c=console: self.install.emit([c]))
+            menu.addAction(f"{console.label}  · {console.host}", lambda c=console: self.install.emit([c]))
         menu.addSeparator()
         menu.addAction(f"All {len(consoles)}", lambda: self.install.emit(list(consoles)))
         self.setMenu(menu)

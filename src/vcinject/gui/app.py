@@ -930,7 +930,7 @@ class MainWindow(QMainWindow):
         if len(consoles) > 1:
             menu = QMenu(self)
             for console in consoles:
-                menu.addAction(f"Install on {console.name}", lambda c=console: self._install_rom(path, [c]))
+                menu.addAction(f"Install on {console.label}", lambda c=console: self._install_rom(path, [c]))
             menu.addAction(f"Install on all {len(consoles)}", lambda: self._install_rom(path, consoles))
             menu.addAction("Install via QR", lambda: self._install_rom(path, None))
             menu.exec(QCursor.pos())

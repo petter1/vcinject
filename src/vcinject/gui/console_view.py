@@ -571,11 +571,11 @@ class ConsoleWindow(QDialog):
             self.status.setText("No 3DS found.")
             self.mirror.set_state("Not connected", "No 3DS found.", "#e5534b")
             return
-        self.mirror.set_state(f"Connected to {self.console.name}",
+        self.mirror.set_state(f"Connected to {self.console.label}",
                               f"{self.console.host} · vcinject Link {self.console.info.get('version', '?')}")
         info = self.console.info
         free = int(info.get("sd_free", 0)) / 2**30
-        self.status.setText(f"<b>{self.console.name}</b> · {self.console.host} · "
+        self.status.setText(f"<b>{self.console.label}</b> · {self.console.host} · "
                             f"system {info.get('system', '?')} · {free:.1f} GiB free on the SD card"
                             + (f"<br><span style='color:#c0392b'>vcinject Link on this 3DS is outdated "
                                f"(version {info.get('version', '?')}, now {remote.LINK_VERSION}):</span> "
@@ -599,7 +599,7 @@ class ConsoleWindow(QDialog):
         consoles = consoles or []
         self.consoles.clear()
         for console in consoles:
-            self.consoles.addItem(f"{console.name} ({console.host})", console)
+            self.consoles.addItem(f"{console.label} · {console.host}", console)
         self.consoles.setVisible(len(consoles) > 1)
         if not consoles:
             self.tabs.setVisible(False)
