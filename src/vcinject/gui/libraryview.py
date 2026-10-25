@@ -1174,11 +1174,55 @@ class LibraryPanel(QFrame):
             return self._icons[key]
         raw = self._raw_cover(entry)
         badges = entry.versions if self.badges.isChecked() and size.width() >= 80 else ()
-        key = (entry.kind, entry.key, id(raw) if raw is not None else None, style, dims, badges)
+        consoles = self._installed_on(entry) if size.width() >= 80 else ()
+        key = (entry.kind, entry.key, id(raw) if raw is not None else None, style, dims, badges, consoles)
         if key not in self._icons:
             pix = self._pixmap(self._cover_of(entry), entry, size)
-            self._icons[key] = self._with_badges(pix, badges) if badges else pix
+            pix = self._with_badges(pix, badges) if badges else pix
+            self._icons[key] = self._with_consoles(pix, consoles) if consoles else pix
         return self._icons[key]
+
+    @staticmethod
+    def _installed_on(entry: Entry) -> tuple:
+        """Badges of the 3DSs this game is installed on (installed.py)."""
+        if entry.kind != "rom" or entry.rom is None:
+            return ()
+        from .. import installed
+        return tuple(c.short for c in installed.on_consoles(entry.rom.sha1, entry.path.name))
+
+    def _with_consoles(self, pix: QPixmap, shorts: tuple) -> QPixmap:
+        """Small purple labels in the top right corner: on which 3DS the game is."""
+        pix = QPixmap(pix)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.Antialiasing)
+        font = QFont(self.font())
+        font.setBold(True)
+        font.setPixelSize(max(9, pix.height() // 12))
+        p.setFont(font)
+        metrics = p.fontMetrics()
+        pad = max(3, pix.height() // 50)
+        height = metrics.height() + pad
+        x, y = pix.width() - 4, 4
+        for short in shorts:
+            width = metrics.horizontalAdvance(short) + pad * 2 + height // 2
+            x -= width
+            if x < 4:
+                break
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(107, 79, 216, 230))
+            p.drawRoundedRect(QRectF(x, y, width, height), height / 2, height / 2)
+            p.setBrush(QColor(255, 255, 255))  # a dot standing for the handheld
+            p.drawEllipse(QRectF(x + pad, y + height / 2 - 2, 4, 4))
+            p.setPen(QColor(255, 255, 255))
+            p.drawText(QRectF(x + pad + 4, y, width - pad - 4, height), Qt.AlignCenter, short)
+            x -= 3
+        p.end()
+        return pix
+
+    def refresh_installed(self):
+        """Redraws the covers: which game is on which 3DS changed."""
+        self._icons = {k: v for k, v in self._icons.items() if k[0] == "stack"}
+        self._refresh()
 
     def _with_badges(self, pix: QPixmap, codes: tuple) -> QPixmap:
         """Small region labels along the bottom of a cover: the versions one has."""

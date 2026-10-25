@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
                                QProgressBar, QPushButton, QScrollArea, QSpinBox, QTabWidget,
                                QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
-from .. import homemenu, remote, smdh, status
+from .. import homemenu, installed, remote, smdh, status
 from ..errors import InjectError
 from ..homemenu import MAIN, Folder, GameCard, Icon
 from .qtutil import gui_settings, to_pixmap
@@ -617,8 +617,7 @@ class ConsoleWindow(QDialog):
         self.load_titles()
 
     def install_link(self):
-        self.main.show_qr(remote.CIA)
-        self.main.raise_()
+        self.main.install_link()
 
     # --- titles ----------------------------------------------------------------------
 
@@ -629,6 +628,7 @@ class ConsoleWindow(QDialog):
             info, titles = link.info(), link.all_titles(product_codes=False)
             link.note(f"Read {sum(t.is_app for t in titles)} games and apps")
             remote.reserve_title_ids(self.console, titles)
+            installed.remember(self.console, titles)
             return info, titles
 
         def done(result, error):
@@ -826,7 +826,7 @@ class ConsoleWindow(QDialog):
                 QTimer.singleShot(4000, look)
 
         def look():
-            if self.isVisible() and self.console is None:
+            if self.console is None:
                 self._run(lambda _link: remote.discover(timeout=1.5, scan=False), found,
                           f"{waiting}: waiting for vcinject Link…")
 

@@ -89,7 +89,7 @@ class HomebrewDialog(QDialog):
                       "projects with an open-source licence. Install also via Universal-Updater "
                       "on the 3DS for everything else.", wordWrap=True, objectName="muted")
         layout.addWidget(note)
-        layout.addWidget(QPushButton("Close", clicked=self.accept), alignment=Qt.AlignRight)
+
 
         self._looked_up.connect(self._show_release)
         self._downloaded.connect(self._serve)
@@ -156,8 +156,9 @@ class HomebrewDialog(QDialog):
         if path is None:
             self.info[key].setText(f"Download failed: {error}")
             return
-        self.main.show_qr(path)  # the QR code appears in the main window
-        self.accept()
+        self.main.show_section("games")  # the QR code appears on the game page
+        self.main.games.setCurrentWidget(self.main.game_page)
+        self.main.show_qr(path)
 
 
 def retroarch_kinds() -> set[str]:
