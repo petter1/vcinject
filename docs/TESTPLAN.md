@@ -95,6 +95,26 @@ Spielstand da? Auf der SD prüfen: Ordner
 - ☐ *Install via QR* → QR an Stelle der Vorschau, Fenster bleibt gleich groß, *Stop* bringt die Vorschau zurück
 - ☐ `start-gui.command` per Doppelklick
 
+## 5a. vcinject Link (3DS über WLAN verwalten)
+
+Vorher: in der GUI *My 3DS… → Install vcinject Link…* (oder `vcinject 3ds setup`), mit FBI per QR installieren.
+
+- ☐ vcinject Link startet aus dem HOME-Menü, zeigt seine IP an
+- ☐ *My 3DS…* findet den 3DS von selbst (sonst: *Connect by IP…* mit der angezeigten IP)
+- ☐ Statuszeile: Name, Systemversion, freier Platz stimmen
+- ☐ Titel-Liste: Namen und Icons stimmen, *Show system titles* zeigt Systemtitel
+- ☐ *Install CIA…*: Fortschritt läuft, Titel erscheint danach in der Liste und im HOME-Menü
+- ☐ *Delete…*: Titel ist weg (auch im HOME-Menü nach Neustart)
+- ☐ Tab *HOME Menu*: Raster entspricht dem echten HOME-Menü (Zeilen-Zahl oben rechts gleich einstellen), Ordner mit richtigen Namen und Inhalt
+- ☐ **Kleine Änderung zuerst:** zwei Icons tauschen → *Save to 3DS* → 3DS startet neu → Icons sind getauscht
+- ☐ Spiel in einen bestehenden Ordner ziehen und wieder heraus → speichern → stimmt nach Neustart
+- ☐ Ordner, Systemapps, Game Card verschieben → verständliche Meldung, dass das (noch) nicht geht
+- ☐ *Restore backup…* mit dem Backup von vorher → altes Layout ist zurück
+- ☐ Badges (Badge Arcade) im HOME-Menü, falls vorhanden: bleiben sie an ihrem Platz?
+
+Wenn etwas schiefgeht: Fehlertext notieren; die Backups liegen in
+`~/Library/Application Support/vcinject/homemenu-backups/`.
+
 ## 6. ROMs, die du noch besorgen musst
 
 Nur von eigenen Modulen dumpen, z. B. mit GB Operator (GB/GBC/GBA), Retrode

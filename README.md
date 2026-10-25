@@ -267,12 +267,40 @@ vcinject import-tickets ticket.db           # reserve title IDs used on your 3DS
 vcinject templates export backup.zip        # back up all templates (keep it private)
 vcinject list                               # everything built so far
 vcinject serve a.cia b.cia                  # serve existing CIAs via QR
+vcinject 3ds titles                         # what is installed (vcinject Link)
 ```
 
 Useful `build` options: `--title`, `--publisher`, `--released`,
 `--icon`/`--banner` (own images), `--icon-style`/`--banner-style`,
 `--save-type`, `--title-id`, `--ghosting`, `--brightness`, `--plate-lang`,
 `--offline`. Run `vcinject build --help` for all of them.
+
+## Managing the 3DS over Wi-Fi (vcinject Link)
+
+vcinject ships a small 3DS app, **vcinject Link**. Install it once
+(`vcinject 3ds setup` shows a QR code for FBI) and start it from the HOME
+Menu: vcinject then finds the 3DS in the same Wi-Fi and can list what is
+installed, install CIAs directly (no FBI or QR code needed), delete titles
+and restart the 3DS.
+
+```sh
+vcinject 3ds setup                 # install vcinject Link by QR code
+vcinject 3ds find                  # 3DSs running vcinject Link
+vcinject 3ds titles                # installed games and apps
+vcinject 3ds install a.cia b.cia   # install over Wi-Fi
+vcinject 3ds delete 000400000F783500
+```
+
+In the GUI, **My 3DS…** shows the installed titles with their icons and the
+**HOME Menu** as on the console, folders included: drag games and apps on the
+SD card to arrange them or drop them onto a folder. *Save to 3DS* backs up the
+current layout on the computer, writes the new one and restarts the 3DS (the
+HOME Menu reads it only when it starts). Folders, system apps and the Game Card
+stay where they are for now: the 3DS keeps their file (Launcher.dat) locked
+while it runs; vcinject reads it from the NAND, but can't write it there.
+
+vcinject Link is built from [companion/](companion/) with
+`scripts/build-companion.sh` (devkitARM, or Docker).
 
 ## Saves
 
@@ -344,6 +372,7 @@ builds flat banners.
 | `artwork.py`, `library.py` | databases, artwork, ROM library |
 | `registry.py`, `tickets.py` | title IDs |
 | `health.py` | setup checks and self-healing |
+| `remote.py` | talking to vcinject Link on the 3DS ([companion/](companion/)) |
 | `builder.py` | build pipeline |
 | `cli.py`, `gui/app.py` | front ends |
 

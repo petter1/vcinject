@@ -240,3 +240,147 @@ def test_qr_panel_button_turns_into_done(tmp_path, monkeypatch):
     assert panel.stop_button.text() == "Done"
     panel.stop_button.click()  # Done stops serving and closes the panel
     assert panel.server is None
+
+
+def test_home_grid_drag_swaps_and_drops_into_folders(tmp_path, monkeypatch):
+    monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path))
+    from PySide6.QtTest import QTest
+
+    from test_homemenu import MARIO, SETTINGS, ZELDA, files
+    from vcinject import homemenu
+    from vcinject.gui.console_view import HomeGrid
+
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    layout = homemenu.Layout(*files(), nand_locked=False)
+    grid = HomeGrid()
+    grid.show_layout(layout, {})
+    grid.set_rows(2)
+    changes = []
+    grid.changed.connect(lambda: changes.append(1))
+
+    def centre(pos):
+        return grid._rect(pos).center()
+
+    def drag(start, end):
+        QTest.mousePress(grid, QtCore.Qt.LeftButton, pos=centre(start))
+        QTest.mouseMove(grid, centre(end))
+        QTest.mouseRelease(grid, QtCore.Qt.LeftButton, pos=centre(end))
+
+    drag(3, 1)                       # Zelda onto System Settings: they swap
+    icons = {i.title_id: i for i in layout.icons}
+    assert (icons[ZELDA].pos, icons[SETTINGS].pos) == (1, 3)
+    drag(2, 4)                       # Mario onto the folder: into it
+    assert icons[MARIO].folder == 0
+    assert len(changes) == 2 and layout.changed
+
+
+def test_my_3ds_window_explains_setup_without_a_console(tmp_path, monkeypatch):
+    monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path))
+    from vcinject import remote
+    from vcinject.gui import app as gui
+
+    monkeypatch.setattr(remote, "discover", lambda *a, **k: [])
+    qt = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = gui.MainWindow()
+    window.console_button.click()
+    console = window.console_window
+    for _ in range(100):
+        qt.processEvents()
+        if not console._busy:
+            break
+        QtCore.QThread.msleep(10)
+    assert console.isEnabled()  # never locked while it works
+    assert "No 3DS found" in console.status.text()
+    assert console.setup_hint.isVisibleTo(console) and not console.tabs.isVisibleTo(console)
+    for w in qt.topLevelWidgets():
+        w.close()
+
+
+def test_update_buttons_and_link_start_the_update(tmp_path, monkeypatch):
+    monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path))
+    from vcinject import remote, status
+    from vcinject.gui.console_view import ConsoleWindow, MirrorPanel
+
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    panel = MirrorPanel()
+    pressed = []
+    panel.act.connect(pressed.append)
+    link = status.Finding(status.UPDATE, "vcinject Link", "version 5 -> 6", "link")
+    panel.set_report([link, status.Finding(status.OK, "System", "11.17.0-50E, the latest")])
+    [button] = [b for b in panel.findChildren(QtWidgets.QPushButton) if b.text() == "Update"]
+    assert button.isEnabled() and panel.update_all.isHidden()   # one update: no "Update all"
+    button.click()
+    assert pressed == [link]
+
+    fbi = status.Finding(status.UPDATE, "FBI Reloaded", "2.6.1 -> 2.6.3", "app:fbi")
+    panel.set_report([link, fbi])
+    everything = []
+    panel.act_all.connect(everything.append)
+    assert not panel.update_all.isHidden() and panel.update_all.text() == "Update all (2)"
+    panel.update_all.click()
+    assert everything == [[link, fbi]]
+
+    monkeypatch.setattr(remote, "discover", lambda *a, **k: [])
+    qt = QtWidgets.QApplication.instance()
+    window = ConsoleWindow(QtWidgets.QWidget())
+    for _ in range(100):  # the search it starts with
+        qt.processEvents()
+        if not window._busy:
+            break
+        QtCore.QThread.msleep(10)
+    window.console = remote.Console("192.168.1.150", info={"version": "5", "name": "Petter1"})
+    window._show_status()
+    assert "Update now" in window.status.text()
+    started = []
+    monkeypatch.setattr(window, "act_on", started.append)
+    window.status.linkActivated.emit("update")
+    assert [f.action for f in started] == ["link"]
+
+
+def test_after_a_restart_the_outcome_is_checked(tmp_path, monkeypatch):
+    monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path))
+    from test_homemenu import ZELDA, files
+    from vcinject import homemenu, remote, status
+    from vcinject.gui import console_view
+    from vcinject.gui.console_view import ConsoleWindow, _arranged, _updated
+
+    luma = status.Finding(status.UPDATE, "Luma3DS", "13.0.2 -> 13.4", "luma")
+    fbi = status.Finding(status.UPDATE, "FBI Reloaded", "2.6.1 -> 2.6.3", "app:fbi")
+    check = _updated([luma, fbi])
+    ok, message = check([status.Finding(status.OK, "Luma3DS", "13.4, up to date"),
+                         status.Finding(status.OK, "FBI Reloaded", "2.6.3, up to date")], None)
+    assert ok and message == "Everything is up to date: Luma3DS 13.4, FBI Reloaded 2.6.3."
+    ok, message = check([status.Finding(status.OK, "Luma3DS", "13.4, up to date"), fbi], None)
+    assert not ok and "FBI Reloaded" in message
+
+    layout = homemenu.Layout(*files())
+    zelda = next(i for i in layout.icons if i.title_id == ZELDA)
+    layout.move(zelda, 0)
+    wanted = {(i.nand, i.title_id): (i.folder, i.pos) for i in layout.icons}
+    assert _arranged(wanted)([], homemenu.Layout(*layout.files()))[0]
+    assert not _arranged(wanted)([], homemenu.Layout(*files()))[0]       # still the old places
+    assert not _arranged(wanted)([], None)[0]
+
+    monkeypatch.setattr(remote, "discover", lambda *a, **k: [])
+    qt = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    shown = []
+    monkeypatch.setattr(console_view.QMessageBox, "information", lambda *a: shown.append(("ok", a[2])))
+    monkeypatch.setattr(console_view.QMessageBox, "warning", lambda *a: shown.append(("warn", a[2])))
+    window = ConsoleWindow(QtWidgets.QWidget())
+    for _ in range(100):
+        qt.processEvents()
+        if not window._busy:
+            break
+        QtCore.QThread.msleep(10)
+    window._verify = check
+    window._report_outcome([status.Finding(status.OK, "Luma3DS", "13.4, up to date"),
+                            status.Finding(status.OK, "FBI Reloaded", "2.6.3, up to date")])
+    assert shown == [("ok", "Everything is up to date: Luma3DS 13.4, FBI Reloaded 2.6.3.")]
+    assert window._verify is None
+    window._report_outcome([])                       # nothing pending: nothing shown
+    assert len(shown) == 1
+    for _ in range(50):
+        qt.processEvents()
+        if not window._busy:
+            break
+        QtCore.QThread.msleep(10)

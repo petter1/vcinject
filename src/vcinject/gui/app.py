@@ -698,11 +698,15 @@ class MainWindow(QMainWindow):
         self.template_button = QPushButton("Setup…", clicked=self.open_setup)
         self.tickets_button = QPushButton("Import tickets…", clicked=self.import_tickets)
         self.homebrew_button = QPushButton("3DS Homebrew…", clicked=self.open_homebrew)
+        self.console_button = QPushButton("My 3DS…", clicked=self.open_console)
+        self.console_button.setToolTip("Over Wi-Fi with vcinject Link: what is installed, install "
+                                       "and delete, arrange the HOME Menu")
         self.homebrew_button.setToolTip("What your 3DS needs for injects, and homebrew apps "
                                         "(DSP1, FBI, Checkpoint …) to install by QR code")
         status_row = QHBoxLayout()
         status_row.addWidget(self.status_label, 1)
         status_row.addWidget(self.homebrew_button)
+        status_row.addWidget(self.console_button)
         status_row.addWidget(self.tickets_button)
         status_row.addWidget(self.template_button)
 
@@ -734,6 +738,7 @@ class MainWindow(QMainWindow):
             lambda: self.drop.versions.currentData() and self.load_rom(self.drop.versions.currentData()))
         self.drop.duplicates.clicked.connect(self.show_duplicates)
         self.library_window: LibraryWindow | None = None
+        self.console_window = None
         columns = QHBoxLayout()
         columns.setSpacing(16)
         columns.addWidget(self.library)
@@ -815,6 +820,13 @@ class MainWindow(QMainWindow):
         dialog = HomebrewDialog(self)
         dialog.setModal(False)
         dialog.show()
+
+    def open_console(self):
+        from .console_view import ConsoleWindow
+        if self.console_window is None:
+            self.console_window = ConsoleWindow(self)
+        self.console_window.show()
+        self.console_window.raise_()
 
     def show_duplicates(self):
         if self.rom_path is None:
