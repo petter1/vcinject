@@ -7,16 +7,14 @@ Homebrew, My 3DS with tabs, QR panel, setup wizard). It should feel like one
 piece and not overwhelm new users. Decide the structure first, then build the
 items below into it.
 
-## Wishes waiting for the new GUI
+## Next in the new GUI
 
-- **Titles as a game database**, not a table: covers / big icons, nice to
-  browse, filters (games, Virtual Console, homebrew, system), search.
-- **Titles clickable, with what FBI offers**: details, launch, delete, back up
-  and restore save data, export icon / banner. Works over vcinject Link:
-  - save data: `ARCHIVE_USER_SAVEDATA` (`0x567890B2`, path media / ID low / ID high)
-    reads fine (Pokémon Ultra Moon: `main`, 445 KiB); unformatted saves answer
-    `0xC8A04555`
-  - launching needs a new vcinject Link command (`aptSetChainloader` + quit)
+- My 3DS: one card per console (as in the concept) instead of the console
+  chooser; recommendations beyond updates (alternative or duplicate apps,
+  saves without a backup).
+- Titles: tell official Virtual Console titles apart (they are listed as
+  "Games and apps"; only injects vcinject built or with an inject product code
+  count as VC); covers from GameTDB for retail games.
 - **Recognise templates on the 3DS** ("first start, dump automatically"):
   - VC Console Look: works over Wi-Fi – ExeFS `banner`, `.code` and `logo`
     of installed titles read decrypted through `ARCHIVE_SAVEDATA_AND_CONTENT`

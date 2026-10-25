@@ -74,6 +74,9 @@ QPushButton#nav { text-align: left; border: none; border-radius: 8px; padding: 9
     font-size: 14px; background: transparent; }
 QPushButton#nav:hover { background: rgba(107, 79, 216, 22); }
 QPushButton#nav:checked { background: rgba(107, 79, 216, 45); font-weight: 600; }
+QPushButton#chip { border: 1px solid palette(mid); border-radius: 13px; padding: 4px 12px;
+    background: palette(base); }
+QPushButton#chip:checked { background: palette(text); color: palette(base); font-weight: 600; }
 QPushButton#link { border: none; background: transparent; color: palette(highlight);
     font-weight: 600; padding: 4px 0; }
 """

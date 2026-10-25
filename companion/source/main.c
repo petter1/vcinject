@@ -42,6 +42,7 @@ enum {
     CMD_PROGRESS = 13,  // u32 done, u32 total, text: what vcinject is doing, shown with a bar
     CMD_RESTART = 14,   // quit and start again, e.g. as the version just installed
     // 15-17 were experiments with the HOME Menu's process, now unused
+    CMD_LAUNCH = 18,    // quit and start a title: u8 media, u64 title ID
 };
 
 #define ERR_BAD_REQUEST 0xE0000001
@@ -50,6 +51,8 @@ enum {
 #define ERR_UNKNOWN_COMMAND 0xE0000004
 
 static bool reboot_requested, restart_requested;
+static u64 launch_title;  // started when we quit (restart: ourselves)
+static u8 launch_media = MEDIATYPE_SD;
 
 // --- buffers ---------------------------------------------------------------
 
@@ -470,6 +473,20 @@ static bool handle(int fd) {
         ui_render();
         reboot_requested = true;
         break;
+    case CMD_LAUNCH: {
+        u8 media = take_u8(&r);
+        u64 id = take_u64(&r);
+        if (r.bad) {
+            res = ERR_BAD_REQUEST;
+            break;
+        }
+        ui_set_activity("Starting the title...", -1);
+        ui_render();
+        launch_title = id;
+        launch_media = media;
+        restart_requested = true;
+        break;
+    }
     case CMD_RESTART:
         ui_set_activity("Restarting vcinject Link...", -1);
         ui_render();
@@ -609,9 +626,13 @@ int main(void) {
     amExit();
     gfxExit();
     if (reboot_requested) APT_HardwareResetAsync();
-    if (restart_requested) {
-        u64 self = 0;  // the HOME Menu starts us again when we quit
-        if (R_SUCCEEDED(APT_GetProgramID(&self))) aptSetChainloader(self, MEDIATYPE_SD);
+    if (restart_requested) {  // the HOME Menu starts the title (or us again) when we quit
+        u64 self = 0;
+        if (launch_title) {
+            aptSetChainloader(launch_title, launch_media);
+        } else if (R_SUCCEEDED(APT_GetProgramID(&self))) {
+            aptSetChainloader(self, MEDIATYPE_SD);
+        }
     }
     return 0;
 }

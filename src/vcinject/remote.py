@@ -18,7 +18,7 @@ from typing import Callable
 from .errors import InjectError
 
 PORT = 34013
-LINK_VERSION = 12  # companion/source/version.h
+LINK_VERSION = 13  # companion/source/version.h
 CIA = Path(__file__).parent / "data" / "vcinject-link.cia"
 
 MEDIA_NAND, MEDIA_SD, MEDIA_GAME_CARD = 0, 1, 2
@@ -27,11 +27,14 @@ MEDIA_NAND, MEDIA_SD, MEDIA_GAME_CARD = 0, 1, 2
 ARCHIVE_SDMC = 0x9
 ARCHIVE_EXTDATA = 0x6
 ARCHIVE_SYSTEM_SAVEDATA = 0x8
-ARCHIVE_NAND_CTR_FS = 0x567890AB  # the NAND's file system (needs FsMountNand)
+ARCHIVE_NAND_CTR_FS = 0x567890AB           # the NAND's file system (needs FsMountNand)
+ARCHIVE_SAVEDATA_AND_CONTENT = 0x2345678A  # a title's ExeFS files, decrypted
+ARCHIVE_USER_SAVEDATA = 0x567890B2         # a title's save data (path: media, ID low, ID high)
 PATH_EMPTY, PATH_BINARY, PATH_ASCII, PATH_UTF16 = 1, 2, 3, 4
 
 (_INFO, _TITLES, _SMDH, _READ, _WRITE, _LIST, _INSTALL, _DELETE, _REBOOT, _REPORT, _NOTE, _SMDHS,
  _PROGRESS, _RESTART) = range(1, 15)  # 15-17 were experiments with the HOME Menu, now unused
+_LAUNCH = 18
 _ICON_BATCH = 20
 _UNKNOWN_COMMAND = 0xE0000004
 _ERRORS = {
@@ -449,6 +452,17 @@ class Link:
     def report(self, text: str) -> None:
         """The status report on the 3DS (status.report_text)."""
         self.show(_REPORT, text)
+
+    def launch(self, title: Title) -> None:
+        """vcinject Link quits and the 3DS starts ``title`` (vcinject Link 13 and newer)."""
+        self._request(_LAUNCH, struct.pack("<BQ", title.media, title.id), "Starting the title")
+
+    def read_content(self, title: Title, name: str) -> bytes:
+        """A file of the title's ExeFS ("icon", "banner", "logo", ".code"), decrypted by FS."""
+        archive = (PATH_BINARY, struct.pack("<4I", title.id & 0xFFFFFFFF, title.id >> 32, title.media, 0))
+        path = (PATH_BINARY, struct.pack("<3I", 0, 0, 2) + name.encode().ljust(8, b"\0"))
+        return self._request(_READ, struct.pack("<I", ARCHIVE_SAVEDATA_AND_CONTENT) + _path(archive)
+                             + _path(path), f"Reading the {name} of {title.id:016X}")
 
     def restart_app(self) -> None:
         """vcinject Link quits and starts again, e.g. as the version just installed.

@@ -1,17 +1,18 @@
 """The "3DS" window: a console running vcinject Link – its titles and its HOME Menu."""
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from PIL import Image
 from PySide6.QtCore import QLocale, QPoint, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
-                               QGridLayout, QHBoxLayout, QInputDialog, QLabel, QMenu, QMessageBox,
-                               QProgressBar, QPushButton, QScrollArea, QSpinBox, QTabWidget,
-                               QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QComboBox, QDialog, QFileDialog, QFrame,
+                               QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListView,
+                               QListWidget, QListWidgetItem, QMenu, QMessageBox, QProgressBar,
+                               QPushButton, QScrollArea, QSpinBox, QTabWidget, QVBoxLayout, QWidget)
 
-from .. import homemenu, installed, remote, smdh, status
+from .. import homemenu, installed, registry, remote, saves, smdh, status
 from ..errors import InjectError
 from ..homemenu import MAIN, Folder, GameCard, Icon
 from .qtutil import gui_settings, to_pixmap
@@ -25,6 +26,25 @@ SETUP_HTML = """
 </ol>
 """
 _MEDIA = {remote.MEDIA_SD: "SD card", remote.MEDIA_NAND: "System", remote.MEDIA_GAME_CARD: "Game Card"}
+
+
+TILE = 132
+TITLE_KINDS = ("All", "Virtual Console", "Game Card", "Games and apps", "System")
+KIND_BADGES = {"Virtual Console": "VC", "Game Card": "CARD", "System": "SYSTEM"}
+_VC_CODES = ("AGB-", "GBA-", "DMG-", "GB-", "CGB-", "GBC-", "NES-", "SNES-", "SNS-", "GEN-", "MD-", "FDS-")
+
+
+def _kind(title: remote.Title, info: "TitleInfo", built: set[int]) -> str:
+    """Virtual Console (built by vcinject, or an inject's product code / publisher), the
+    Game Card, system applications, or other games and apps."""
+    if title.is_system:
+        return "System"
+    if title.media == remote.MEDIA_GAME_CARD:
+        return "Game Card"
+    if (title.id in built or title.product_code.startswith(_VC_CODES)
+            or "virtual console" in info.publisher.lower()):
+        return "Virtual Console"
+    return "Games and apps"
 
 
 def _updated(findings: list[status.Finding]):
@@ -454,26 +474,77 @@ class ConsoleWindow(QDialog):
     # --- tabs -------------------------------------------------------------------
 
     def _titles_tab(self) -> QWidget:
-        self.title_list = QTreeWidget()
-        self.title_list.setHeaderLabels(["Title", "Publisher", "Title ID", "Where", "Version", "Size"])
-        self.title_list.setIconSize(QSize(32, 32))
-        self.title_list.setRootIsDecorated(False)
-        self.title_list.setSortingEnabled(True)
-        self.title_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.title_list.setColumnWidth(0, 300)
-        self.show_system = QCheckBox("Show system titles, updates and DLC")
-        self.show_system.toggled.connect(self._fill_titles)
-        install = QPushButton("Install CIA…", clicked=self.install_cia)
-        self.delete_button = QPushButton("Delete…", clicked=self.delete_titles)
-        self._extra_needs_3ds = [install, self.delete_button]
-        row = QHBoxLayout()
-        row.addWidget(self.show_system, 1)
-        row.addWidget(self.delete_button)
-        row.addWidget(install)
+        """The titles as a game database: tiles, filters, and what FBI offers per title."""
+        chips = QHBoxLayout()
+        self.title_filter = QButtonGroup(self)
+        for index, kind in enumerate(TITLE_KINDS):
+            chip = QPushButton(kind, objectName="chip", checkable=True, checked=index == 0)
+            self.title_filter.addButton(chip, index)
+            chips.addWidget(chip)
+        self.title_filter.idClicked.connect(lambda _id: self._fill_titles())
+        chips.addStretch(1)
+        self.title_search = QLineEdit(placeholderText="Search", clearButtonEnabled=True)
+        self.title_search.setMaximumWidth(240)
+        self.title_search.textChanged.connect(self._fill_titles)
+        chips.addWidget(self.title_search)
+
+        self.title_grid = QListWidget()
+        self.title_grid.setViewMode(QListView.IconMode)
+        self.title_grid.setIconSize(QSize(TILE, TILE))
+        self.title_grid.setGridSize(QSize(TILE + 34, TILE + 52))
+        self.title_grid.setResizeMode(QListView.Adjust)
+        self.title_grid.setMovement(QListView.Static)
+        self.title_grid.setWordWrap(True)
+        self.title_grid.setUniformItemSizes(True)
+        self.title_grid.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.title_grid.currentItemChanged.connect(lambda item, _old: self._show_title(
+            item.data(Qt.UserRole) if item else None))
+        self._tiles: dict[tuple, QPixmap] = {}
+
+        panel = QFrame(objectName="card")
+        panel.setFixedWidth(300)
+        side = QVBoxLayout(panel)
+        side.setContentsMargins(16, 16, 16, 16)
+        self.title_icon = QLabel(alignment=Qt.AlignCenter)
+        self.title_icon.setFixedHeight(140)
+        self.title_name = QLabel(wordWrap=True)
+        self.title_name.setStyleSheet("font-size: 16px; font-weight: 700;")
+        self.title_facts = QLabel(wordWrap=True, objectName="muted")
+        self.title_facts.setTextFormat(Qt.RichText)
+        side.addWidget(self.title_icon)
+        side.addWidget(self.title_name)
+        side.addWidget(self.title_facts)
+        side.addSpacing(6)
+        self.title_actions: dict[str, QPushButton] = {}
+        for key, text, slot, primary in (
+                ("start", "Start on the 3DS", self.start_title, True),
+                ("backup", "Back up save now", self.backup_save, False),
+                ("restore", "Restore a save…", self.restore_save, False),
+                ("export", "Save icon and banner…", self.export_art, False),
+                ("dump", "Dump as CIA  ·  GodMode9, planned", None, False),
+                ("delete", "Delete from this 3DS…", self.delete_titles, False)):
+            button = QPushButton(text, objectName="primary" if primary else "secondary")
+            if slot:
+                button.clicked.connect(slot)
+            else:
+                button.setEnabled(False)
+                button.setToolTip("Reading a whole title needs GodMode9; see docs/TODO.md")
+            self.title_actions[key] = button
+            side.addWidget(button)
+        side.addStretch(1)
+        install = QPushButton("Install CIA…", objectName="secondary", clicked=self.install_cia)
+        side.addWidget(install)
+        self.delete_button = self.title_actions["delete"]
+        self._extra_needs_3ds = [install] + [b for k, b in self.title_actions.items() if k != "dump"]
+
+        content = QHBoxLayout()
+        content.addWidget(self.title_grid, 1)
+        content.addWidget(panel)
         tab = QWidget()
         box = QVBoxLayout(tab)
-        box.addWidget(self.title_list, 1)
-        box.addLayout(row)
+        box.addLayout(chips)
+        box.addLayout(content, 1)
+        self._show_title(None)
         return tab
 
     def _home_tab(self) -> QWidget:
@@ -846,20 +917,184 @@ class ConsoleWindow(QDialog):
             QMessageBox.warning(self, "Not quite", message)
 
     def _fill_titles(self):
-        self.title_list.clear()
+        kind = TITLE_KINDS[max(0, self.title_filter.checkedId())]
+        words = self.title_search.text().lower().split()
+        current = self.title_grid.currentItem()
+        current = current.data(Qt.UserRole).id if current else None
+        built = {e.title_id for e in registry.load().values() if not e.imported}
+        shown = []
         for title in self.titles:
-            if not title.is_app and not self.show_system.isChecked():
+            info = self.infos.get(title.id)
+            if info is None:  # updates, DLC, system modules: no icon, not shown
                 continue
-            info = self.infos.get(title.id) or TitleInfo(title, None)
-            item = QTreeWidgetItem([info.name, info.publisher, f"{title.id:016X}",
-                                    _MEDIA.get(title.media, "?"), str(title.version),
-                                    f"{title.size / 2**20:.1f} MiB"])
-            item.setData(0, Qt.UserRole, title)
-            item.setToolTip(0, info.long_name)
-            if info.icon is not None:
-                item.setIcon(0, to_pixmap(info.icon, 32, 32))
-            self.title_list.addTopLevelItem(item)
-        self.title_list.sortItems(0, Qt.AscendingOrder)
+            title_kind = _kind(title, info, built)
+            if (kind == "All" and title_kind == "System") or kind not in ("All", title_kind):
+                continue
+            if words and not all(w in f"{info.name} {info.long_name} {info.publisher}".lower() for w in words):
+                continue
+            shown.append((info.name.lower(), title, info, title_kind))
+        self.title_grid.blockSignals(True)
+        self.title_grid.clear()
+        for _name, title, info, title_kind in sorted(shown, key=lambda t: t[0]):
+            item = QListWidgetItem(QIcon(self._tile(title, info, title_kind)), info.name)
+            item.setData(Qt.UserRole, title)
+            item.setToolTip(f"{info.long_name or info.name}\n{info.publisher}")
+            self.title_grid.addItem(item)
+            if title.id == current:
+                self.title_grid.setCurrentItem(item)
+        self.title_grid.blockSignals(False)
+        self._show_title(self.title_grid.currentItem().data(Qt.UserRole)
+                         if self.title_grid.currentItem() else None)
+
+    def _tile(self, title: remote.Title, info: TitleInfo, kind: str) -> QPixmap:
+        """The title's icon, big and crisp, on a card tinted like it, with its kind."""
+        key = (title.id, title.version, info.icon is not None, kind)
+        if key in self._tiles:
+            return self._tiles[key]
+        pix = QPixmap(TILE, TILE)
+        pix.fill(Qt.transparent)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.Antialiasing)
+        tint = info.icon.resize((1, 1)).getpixel((0, 0)) if info.icon is not None else (120, 110, 160)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(*[int(c * 0.55) for c in tint]))
+        p.drawRoundedRect(0, 0, TILE, TILE, 14, 14)
+        if info.icon is not None:
+            icon = to_pixmap(info.icon, 96, 96, smooth=False)  # 2x: pixel art stays sharp
+            p.drawPixmap((TILE - 96) // 2, (TILE - 96) // 2 + 6, icon)
+        badge = KIND_BADGES.get(kind, "")
+        if badge:
+            font = QFont(p.font().family(), 8)
+            font.setBold(True)
+            p.setFont(font)
+            width = p.fontMetrics().horizontalAdvance(badge) + 12
+            p.setBrush(QColor(0, 0, 0, 120))
+            p.drawRoundedRect(6, 6, width, 16, 6, 6)
+            p.setPen(Qt.white)
+            p.drawText(QRect(6, 6, width, 16), Qt.AlignCenter, badge)
+        p.end()
+        self._tiles[key] = pix
+        return pix
+
+    def _selected_title(self) -> remote.Title | None:
+        item = self.title_grid.currentItem()
+        return item.data(Qt.UserRole) if item else None
+
+    def _show_title(self, title: remote.Title | None):
+        has = title is not None
+        for key, button in self.title_actions.items():
+            button.setVisible(has)
+        if not has:
+            self.title_icon.clear()
+            self.title_name.setText("Choose a title")
+            self.title_facts.setText("Start it on the 3DS, back up or restore its save, or delete it.")
+            return
+        info = self.infos.get(title.id) or TitleInfo(title, None)
+        if info.icon is not None:
+            self.title_icon.setPixmap(to_pixmap(info.icon, 128, 128, smooth=False))
+        else:
+            self.title_icon.clear()
+        self.title_name.setText(info.long_name.replace("\n", " ") or info.name)
+        last = saves.backups(self.console, title) if self.console else []
+        rows = [("Publisher", info.publisher or "–"),
+                ("Version", status.version_text(title.version)),
+                ("Size", f"{title.size / 2**20:.1f} MiB"),
+                ("Where", _MEDIA.get(title.media, "?")),
+                ("Title ID", f"{title.id:016X}"),
+                ("Save backup", last[0].stem if last else "none yet")]
+        self.title_facts.setText("<table cellspacing=3>" + "".join(
+            f"<tr><td>{k}</td><td style='color:palette(text)'>&nbsp;{v}</td></tr>" for k, v in rows)
+            + "</table>")
+        self.title_actions["delete"].setEnabled(not title.is_system and not self._busy)
+        self.title_actions["restore"].setEnabled(bool(last) and not self._busy)
+
+    def start_title(self):
+        title = self._selected_title()
+        if title is None:
+            return
+
+        def done(_result, error):
+            if error:
+                QMessageBox.warning(self, "Start", error if "too old" not in error else
+                                    "vcinject Link on this 3DS is too old to start titles: update it "
+                                    "in the Overview.")
+                return
+            self.mirror.add_activity("Started a title; vcinject Link closed for it")
+            self._show_status("vcinject Link closed to start the title. Open it again afterwards; "
+                              "vcinject reconnects by itself.")
+            self._await_console("A title is running on the 3DS", None)
+
+        self._run(lambda link: link.launch(title), done, "Starting it on the 3DS…")
+
+    def backup_save(self):
+        title = self._selected_title()
+        if title is None:
+            return
+
+        def work(link):
+            link.note(f"Backing up the save of {self.infos[title.id].name[:30]}")
+            return saves.backup(link, self.console, title)
+
+        def done(path, error):
+            if path is None:
+                QMessageBox.warning(self, "Back up save", error)
+            else:
+                self.mirror.add_activity(f"Save backed up: {path.parent.name}/{path.name}")
+            self._show_title(self._selected_title())
+
+        self._run(work, done, "Backing up the save…")
+
+    def restore_save(self):
+        title = self._selected_title()
+        if title is None:
+            return
+        found = saves.backups(self.console, title)
+        if not found:
+            return
+        name, ok = QInputDialog.getItem(self, "Restore a save", "Backup to put back on the 3DS "
+                                        "(the save there is replaced):", [p.stem for p in found], 0, False)
+        if not ok:
+            return
+        chosen = next(p for p in found if p.stem == name)
+
+        def work(link):
+            link.note("Restoring a save")
+            return saves.restore(link, title, chosen)
+
+        def done(count, error):
+            if count is None:
+                QMessageBox.warning(self, "Restore a save", error)
+            else:
+                QMessageBox.information(self, "Restore a save", f"Restored {count} file(s) from {name}.")
+
+        self._run(work, done, "Restoring the save…")
+
+    def export_art(self):
+        title = self._selected_title()
+        if title is None:
+            return
+        target = QFileDialog.getExistingDirectory(self, "Save icon and banner to")
+        if not target:
+            return
+        info = self.infos.get(title.id)
+        stem = re.sub(r"[^\w .-]+", "_", info.name if info else f"{title.id:016X}").strip()
+
+        def work(link):
+            written = []
+            if info and info.icon is not None:
+                path = Path(target) / f"{stem} icon.png"
+                info.icon.resize((192, 192), Image.NEAREST).save(path)
+                written.append(path.name)
+            try:
+                banner = link.read_content(title, "banner")
+                (Path(target) / f"{stem} banner.bin").write_bytes(banner)
+                written.append(f"{stem} banner.bin")
+            except remote.RemoteError:
+                pass
+            return written
+
+        self._run(work, lambda written, error: QMessageBox.information(
+            self, "Saved", error or "Saved: " + ", ".join(written or ["nothing"])), "Saving icon and banner…")
 
     def install_cia(self):
         paths, _ = QFileDialog.getOpenFileNames(self, "Install on the 3DS", "", "CIA (*.cia)")
@@ -888,10 +1123,9 @@ class ConsoleWindow(QDialog):
             self._set_busy(f"{text} ({done} / {total})", done, total)
 
     def delete_titles(self):
-        chosen = [item.data(0, Qt.UserRole) for item in self.title_list.selectedItems()]
-        chosen = [title for title in chosen if not title.is_system]
+        chosen = [t for t in [self._selected_title()] if t is not None and not t.is_system]
         if not chosen:
-            QMessageBox.information(self, "Delete", "Select the games or apps to delete. System "
+            QMessageBox.information(self, "Delete", "Choose a game or app to delete. System "
                                     "titles can't be deleted here.")
             return
         names = "\n".join(self.infos[t.id].name if t.id in self.infos else f"{t.id:016X}" for t in chosen)
