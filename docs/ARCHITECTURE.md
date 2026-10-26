@@ -48,8 +48,9 @@ done the way they are. User documentation is in the [README](../README.md).
 
 `cardview.py` is the one look of every collection: `CardView` (a `QListView`
 whose delegate paints `Card`s – fast with thousands) shows cards whose width
-follows a stepless zoom and fills the width, or rows with or without a
-picture; `ViewControls` switches and remembers it per collection. Pictures are
+follows a stepless zoom and fills the width – for Games and Homebrew
+with the picture beside the text (`side=True`, the look of the 3DS cards on
+My 3DS) – or rows with or without a picture; `ViewControls` switches and remembers it per collection. Pictures are
 asked for only when a card is painted. `qtutil.thumbnail()` keeps shrunk
 pictures on disk for good (`<data>/thumbnails`). The pictures of the consoles:
 the 3DS tells its model, not its colour, so the colour is chosen per console
