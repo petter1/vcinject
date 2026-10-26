@@ -416,12 +416,13 @@ class CardView(QListView):
 
 class ViewControls(QWidget):
     """Cards / rows / rows without cover, and the zoom slider for the cards.
-    Remembers the choice under ``<name>/view`` and ``<name>/zoom``."""
+    Remembers the choice under ``<name>/view`` and ``<name>/zoom``. ``extra`` adds
+    looks of the caller's own ((mode, symbol, tooltip)); the card views keep theirs then."""
     changed = Signal()
     ZOOM = (140, 460)
     MODES = ((CARDS, "▦", "Cards"), (ROWS, "☰", "Rows with covers"), (LIST, "≡", "Rows without covers"))
 
-    def __init__(self, name: str, default_zoom: int = 220, views: list[CardView] = ()):
+    def __init__(self, name: str, default_zoom: int = 220, views: list[CardView] = (), extra=()):
         super().__init__()
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.name = name
@@ -439,7 +440,7 @@ class ViewControls(QWidget):
         layout.addSpacing(6)
         self.group = QButtonGroup(self)
         wanted = str(self.settings.value(f"{name}/view", CARDS))
-        for mode, symbol, tip in self.MODES:
+        for mode, symbol, tip in self.MODES + tuple(extra):
             button = QToolButton(text=symbol, toolTip=tip, checkable=True, objectName="viewMode")
             button.setChecked(mode == wanted)
             button.setProperty("mode", mode)
@@ -460,8 +461,13 @@ class ViewControls(QWidget):
             self.views.append(view)
         view.zoom_requested = lambda delta: self.zoom.setValue(self.zoom.value() + delta // 6)
         view.zoom = self.zoom.value()
-        view.set_mode(self.mode)
+        view.set_mode(self.card_mode)
         self.zoom.setVisible(self.mode == CARDS)
+
+    @property
+    def card_mode(self) -> str:
+        """The look of the card views (an extra look leaves them as cards)."""
+        return self.mode if self.mode in (CARDS, ROWS, LIST) else CARDS
 
     def set_mode(self, mode: str):
         for button in self.group.buttons():
@@ -473,7 +479,7 @@ class ViewControls(QWidget):
         self.settings.setValue(f"{self.name}/view", self.mode)
         self.zoom.setVisible(self.mode == CARDS)
         for view in self.views:
-            view.set_mode(self.mode)
+            view.set_mode(self.card_mode)
         self.changed.emit()
 
     def _zoomed(self, value: int):

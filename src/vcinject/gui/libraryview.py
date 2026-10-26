@@ -1,4 +1,4 @@
-"""The ROM library: data, filters and its views (list, grid, details, Cover Flow).
+"""The ROM library: data, filters and its views (list, cards/rows, details, Cover Flow).
 
 LibraryPanel owns everything about the library – scanning, identification,
 the missing-games catalog, versions, series – and turns it into a list of
@@ -24,12 +24,14 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout,
     QGroupBox,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListView, QListWidget, QListWidgetItem, QMainWindow,
-    QMenu, QMessageBox, QProgressDialog, QPushButton, QScrollBar, QStackedWidget, QToolButton,
+    QMenu, QMessageBox, QProgressDialog, QPushButton, QScrollArea, QScrollBar, QStackedWidget,
+    QToolButton,
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from .. import art, library, systems
 from ..errors import InjectError
+from .cardview import GREEN, ORANGE, Card, CardView, ViewControls
 from .qtutil import gui_settings, to_qimage
 
 KEY_ROLE = Qt.UserRole
@@ -201,6 +203,75 @@ class ListView(QListWidget):
         viewport = self.viewport().rect()
         return [self._entries[key] for key, item in self._items.items()
                 if self.visualItemRect(item).intersects(viewport)]
+
+
+class CardsView(CardView):
+    """The gallery as cards (stepless zoom) or rows, with or without covers – the
+    look of the Homebrew page and the titles on a 3DS."""
+    current_changed = Signal(object)
+    activated = Signal(object)
+    context = Signal(object, object)
+    toggled = Signal(str, bool)
+    scrolled = Signal()
+
+    def __init__(self, panel: "LibraryPanel"):
+        super().__init__(self._picture, cover_ratio=0.9)
+        self.panel = panel
+        self._entries: dict[str, Entry] = {}
+        self.card_clicked.connect(self._clicked)
+        self.card_current.connect(lambda key: self.current_changed.emit(self._entries.get(key)))
+        self.card_activated.connect(lambda key: self.activated.emit(self._entries.get(key)))
+        self.card_context.connect(lambda key, at: self.context.emit(self._entries.get(key), at))
+        self.verticalScrollBar().valueChanged.connect(lambda: self.scrolled.emit())
+
+    def _clicked(self, key):
+        entry = self._entries.get(key)
+        if entry is not None and entry.kind == "stack":
+            self.toggled.emit(entry.key, not entry.expanded)
+        else:
+            self.current_changed.emit(entry)
+
+    def _picture(self, card: Card, size: QSize) -> QPixmap:
+        # covers come in a few sizes only: the zoom is stepless, the cache is not
+        side = max(80, min(360, (max(size.width(), size.height()) + 39) // 40 * 40))
+        return self.panel.icon(card.data, QSize(side, side))
+
+    def _card(self, entry: Entry) -> Card:
+        from .. import installed
+        line, color = "", ""
+        if entry.kind == "missing":
+            line = "Not in your folder"
+        elif entry.kind == "stack":
+            line = entry.details[0] if entry.details else ""
+        elif entry.rom is not None:
+            on = installed.on_consoles(entry.rom.sha1, entry.path.name)
+            if on:
+                line, color = "✓ " + ", ".join(c.label.split(" (")[0] for c in on), GREEN
+            elif entry.rom.built:
+                line = "✓ built"
+            if entry.dump_state == "bad":
+                line, color = "⚠ no known good dump", ORANGE
+        notes = [d for d in entry.details if "versions" in d or d.startswith("⚠")]
+        subtitle = " · ".join(f for f in (entry.system, entry.year, *notes[:1]) if f)
+        marker = {"stack": "▾ " if entry.expanded else "▸ "}.get(entry.kind, "")
+        tint = None
+        if entry.in_stack:
+            tint = QColor(self.palette().highlight().color())
+            tint.setAlpha(40)
+        return Card(entry.key, marker + entry.title, subtitle, status=line, status_color=color,
+                    dim=entry.kind == "missing", tint=tint, tooltip=entry.tooltip, data=entry)
+
+    def set_entries(self, entries: list[Entry]):
+        flat = flatten(entries)
+        self._entries = {e.key: e for e in flat}
+        self.set_cards([self._card(e) for e in flat])
+        self.scrolled.emit()
+
+    def set_current(self, key: str, scroll_to: bool = True):
+        super().set_current(key, scroll_to)
+
+    def visible_entries(self) -> list[Entry]:
+        return [c.data for c in self.visible_cards()]
 
 
 class DetailsView(QTreeWidget):
@@ -568,7 +639,8 @@ class LibraryPanel(QFrame):
     MISSING_STYLES = {"greyed": "Missing: greyed out", "bw": "Missing: black & white"}
     SORTS = {"name": "Sort: Name", "year": "Sort: Release year", "system": "Sort: System",
              "folder": "Sort: Folder"}
-    VIEWS = {"grid": "Grid", "details": "Details", "coverflow": "Cover Flow"}
+    # looks beside the cards and rows of the card view
+    EXTRA_VIEWS = (("details", "▤", "Table with every column"), ("coverflow", "◫", "Cover Flow"))
     COMPILATIONS = "\x00compilations"  # series filter entry for multi-game cartridges
     MISSING_COVERS_KEPT = 600  # covers of missing games held in memory (~200 KB each)
 
@@ -615,14 +687,7 @@ class LibraryPanel(QFrame):
         choose = QPushButton("Folder…", clicked=self.choose_folder)
         top = QHBoxLayout()
         top.addWidget(title, 1)
-        self.view_choice = QComboBox()
-        if grid:
-            for key, label in self.VIEWS.items():
-                self.view_choice.addItem(label, key)
-            self.view_choice.setCurrentIndex(max(0, self.view_choice.findData(
-                self.settings.value("library/view", "grid"))))
-            top.addWidget(self.view_choice)
-        else:
+        if not grid:
             pop_out = QToolButton(text="⧉", clicked=lambda: self.open_window.emit(),
                                   toolTip="Open the library in its own window "
                                           "(grid, details, Cover Flow)")
@@ -739,21 +804,23 @@ class LibraryPanel(QFrame):
         self.views = QStackedWidget()
         self._views: dict[str, QWidget] = {}
         if grid:
-            self._add_view("grid", ListView(self, grid=True))
+            self._add_view("cards", CardsView(self))
             self._add_view("details", DetailsView(self))
             self._add_view("coverflow", CoverFlowView(self))
             self._views["details"].sort_requested.connect(
                 lambda key: self.sort.setCurrentIndex(self.sort.findData(key)))
-            self.view_choice.currentIndexChanged.connect(self._view_changed)
+            self.view_controls = ViewControls("library", 200, [self._views["cards"]], self.EXTRA_VIEWS)
+            self.view_controls.changed.connect(self._view_changed)
         else:
             self._add_view("list", ListView(self, grid=False))
-        self.view = self._views[self.view_choice.currentData() or "list"]
+        self.view = self._views[self._view_key()]
         self.views.setCurrentWidget(self.view)
 
-        # filters, sorting and display options live in their own window
+        # filters, sorting and display options: beside the gallery, or a window of their own
         self.options = LibraryOptions(self)
         options_button = QToolButton(text="View options", clicked=self.show_options,
                                      toolTip="Filters, sorting, series, missing games, symbols")
+        self.options_button = options_button
         options_button.setIcon(tool_icon("options", self.palette().text().color()))
         options_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.summary = QLabel(objectName="muted", wordWrap=True)
@@ -784,10 +851,17 @@ class LibraryPanel(QFrame):
             layout.addLayout(row)
             second = QHBoxLayout()
             second.addWidget(self.summary, 1)
-            for widget in (self.sort, self.view_choice, options_button, more):
+            options_button.setCheckable(True)
+            options_button.setChecked(self.settings.value("library/options_open", False, type=bool))
+            for widget in (self.sort, self.view_controls, options_button, more):
                 second.addWidget(widget)
             layout.addLayout(second)
-            layout.addWidget(self.views, 1)
+            content = QHBoxLayout()
+            content.setSpacing(12)
+            content.addWidget(self.views, 1)
+            content.addWidget(self.options)
+            layout.addLayout(content, 1)
+            self.options.setVisible(options_button.isChecked())
             bottom = QHBoxLayout()
             bottom.addWidget(self.count, 1)
             bottom.addWidget(self.folder_label)
@@ -836,9 +910,16 @@ class LibraryPanel(QFrame):
     def list(self) -> QWidget:  # the current view (kept for callers that knew the old list)
         return self.view
 
+    def _view_key(self) -> str:
+        if not self.grid:
+            return "list"
+        mode = self.view_controls.mode
+        return mode if mode in self._views else "cards"
+
     def _view_changed(self):
-        key = self.view_choice.currentData()
-        self.settings.setValue("library/view", key)
+        key = self._view_key()
+        if self._views[key] is self.view:
+            return
         self.view = self._views[key]
         self.views.setCurrentWidget(self.view)
         self.view.set_entries(self._entries)
@@ -1214,6 +1295,10 @@ class LibraryPanel(QFrame):
         self._update_summary()
 
     def show_options(self):
+        if self.grid:  # beside the gallery, shown and hidden by the Options button
+            self.options.setVisible(self.options_button.isChecked())
+            self.settings.setValue("library/options_open", self.options_button.isChecked())
+            return
         self.options.show()
         self.options.raise_()
         self.options.activateWindow()
@@ -1863,13 +1948,31 @@ def _game_key(game: library.CatalogGame) -> str:
 
 
 class LibraryOptions(QDialog):
-    """Filters, sorting and display options of one library view; changes apply at once."""
+    """Filters, sorting and display options of one library view; changes apply at once.
+    For the gallery a panel beside the covers (never over them), else a window."""
 
     def __init__(self, panel: "LibraryPanel"):
         super().__init__(panel)
         self.setWindowTitle("Library view options")
-        self.setMinimumWidth(380)
-        layout = QVBoxLayout(self)
+        if panel.grid:
+            self.setWindowFlags(Qt.Widget)
+            self.setFixedWidth(290)
+            outer = QVBoxLayout(self)
+            outer.setContentsMargins(0, 0, 0, 0)
+            scroll = QScrollArea(widgetResizable=True, frameShape=QFrame.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            inside = QFrame(objectName="card")
+            scroll.setWidget(inside)
+            outer.addWidget(scroll)
+            layout = QVBoxLayout(inside)
+            head = QHBoxLayout()
+            head.addWidget(QLabel("View options", objectName="cardTitle"), 1)
+            head.addWidget(QToolButton(text="✕", autoRaise=True, toolTip="Hide the options",
+                                       clicked=lambda: panel.options_button.click()))
+            layout.addLayout(head)
+        else:
+            self.setMinimumWidth(380)
+            layout = QVBoxLayout(self)
 
         def group(title: str, *widgets):
             box = QGroupBox(title)
@@ -1893,8 +1996,10 @@ class LibraryOptions(QDialog):
             sub.addWidget(widget)
         missing.addLayout(sub)
         group("Covers", panel.check_on_select)
-        close = QPushButton("Close", clicked=self.accept)
-        layout.addWidget(close, alignment=Qt.AlignRight)
+        if panel.grid:
+            layout.addStretch(1)
+        else:
+            layout.addWidget(QPushButton("Close", clicked=self.accept), alignment=Qt.AlignRight)
 
 
 class VersionsDialog(QDialog):

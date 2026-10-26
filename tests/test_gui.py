@@ -95,10 +95,23 @@ def test_library_window_views(tmp_path, monkeypatch):
     panel.show()
     panel.load(roms)
     panel.stacks.setChecked(True)
-    for key in ("grid", "details", "coverflow"):
-        panel.view_choice.setCurrentIndex(panel.view_choice.findData(key))
+    for key in ("cards", "details", "coverflow"):
+        panel.view_controls.set_mode(key)
         qt.processEvents()
         assert panel.view is panel._views[key]
+    panel.view_controls.set_mode("rows")                 # rows are the card view's other look
+    assert panel.view is panel._views["cards"] and panel.view.mode == "rows"
+    cards = panel._views["cards"]
+    assert [c.title for c in cards.cards()] == ["Bionicle", "▸ Pokemon"]
+    cards.card_clicked.emit("stack:Pokemon")             # a click opens the stack
+    assert [c.title for c in cards.cards()] == ["Bionicle", "▾ Pokemon", "Pokemon - Emerald Version",
+                                                "Pokemon Pinball"]
+    cards.card_clicked.emit("stack:Pokemon")
+    assert not panel.options.isVisible()                 # the options open beside the covers
+    panel.options_button.click()
+    assert panel.options.isVisible() and panel.options.parent() is panel
+    assert panel.options.geometry().left() >= panel.views.geometry().right()
+    panel.options_button.click()
     details = panel._views["details"]
     assert details.topLevelItemCount() == 2 and details.topLevelItem(1).childCount() == 2
     details.topLevelItem(1).setExpanded(True)  # expanding the tree node opens the stack
