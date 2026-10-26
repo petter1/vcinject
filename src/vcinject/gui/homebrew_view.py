@@ -157,11 +157,11 @@ class HomebrewPage(QWidget):
             self.store_sort.addItem(label)
         self.store_sort.currentIndexChanged.connect(lambda _i: self._fill_store())
         # every shelf as the same cards (or rows), like the games and the titles on a 3DS
-        self.cards = CardView(self._card_picture, cover_ratio=0.5, with_text=True, side=True)
+        self.cards = CardView(self._card_picture, cover_ratio=0.5, with_text=True)
         self.cards.card_clicked.connect(self._open_card)
         self.cards.card_activated.connect(self._open_card)
         self.cards.card_context.connect(self._card_menu)
-        self.view_controls = ViewControls("homebrew", 460, [self.cards])
+        self.view_controls = ViewControls("homebrew", 260, [self.cards])
         chips.addWidget(self.store_search)
         # second row, as on Games: how many, then sorting and the look
         self.shelf_count = QLabel(objectName="muted")

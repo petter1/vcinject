@@ -215,7 +215,7 @@ class CardsView(CardView):
     scrolled = Signal()
 
     def __init__(self, panel: "LibraryPanel"):
-        super().__init__(self._picture, cover_ratio=0.9, side=True)
+        super().__init__(self._picture, cover_ratio=0.9)
         self.panel = panel
         self._entries: dict[str, Entry] = {}
         self.card_clicked.connect(self._clicked)
@@ -809,7 +809,7 @@ class LibraryPanel(QFrame):
             self._add_view("coverflow", CoverFlowView(self))
             self._views["details"].sort_requested.connect(
                 lambda key: self.sort.setCurrentIndex(self.sort.findData(key)))
-            self.view_controls = ViewControls("library", 420, [self._views["cards"]], self.EXTRA_VIEWS)
+            self.view_controls = ViewControls("library", 200, [self._views["cards"]], self.EXTRA_VIEWS)
             self.view_controls.changed.connect(self._view_changed)
         else:
             self._add_view("list", ListView(self, grid=False))

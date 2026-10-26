@@ -99,32 +99,8 @@ class CardDelegate(QStyledItemDelegate):
         small.setPixelSize(11)
         return title, small
 
-    SIDE_PAD = 16       # side cards: inside the card, and between picture and text
-    SIDE_PICTURE = 0.38  # share of a side card's width for its picture
-    SIDE_RATIO = 0.83    # the picture's box: as on the 3DS cards of My 3DS (180 × 150)
-
-    def _side_fonts(self):
-        base = self.view.font()
-        title = QFont(base)
-        title.setBold(True)
-        title.setPixelSize(16)
-        small = QFont(base)
-        small.setPixelSize(12)
-        return title, small
-
-    def _side_text_height(self) -> int:
-        title, small = self._side_fonts()
-        line = QFontMetrics(small).height()
-        height = QFontMetrics(title).height() + line + 8 + line  # name, facts, status
-        if self.view.with_text:
-            height += 3 * line + 8
-        return height
-
     def card_height(self, width: int) -> int:
         """Height of a card ``width`` wide (without the space around it)."""
-        if self.view.side:
-            picture = int(width * self.SIDE_PICTURE * self.SIDE_RATIO)
-            return max(picture, self._side_text_height()) + 2 * self.SIDE_PAD
         title, small = self._fonts()
         lines = QFontMetrics(title).height() + 2 * QFontMetrics(small).height() + 6
         if self.view.with_text:
@@ -147,9 +123,7 @@ class CardDelegate(QStyledItemDelegate):
         p.save()
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.SmoothPixmapTransform, not card.sharp)
-        if self.view.mode == CARDS and self.view.side:
-            self._paint_side_card(p, option, card)
-        elif self.view.mode == CARDS:
+        if self.view.mode == CARDS:
             self._paint_card(p, option, card)
         else:
             self._paint_row(p, option, card)
@@ -189,15 +163,7 @@ class CardDelegate(QStyledItemDelegate):
         width = self.view.card_width
         rect = QRect(0, 0, width, self.card_height(width))
         rect.moveCenter(option.rect.center())
-        selected = bool(option.state & QStyle.State_Selected)
-        hover = bool(option.state & QStyle.State_MouseOver)
-        frame = QPainterPath()
-        frame.addRoundedRect(rect.adjusted(0, 0, -1, -1), 10, 10)
-        p.fillPath(frame, QApplication.palette().base())  # the view itself is see-through
-        border = palette.highlight().color() if selected else palette.mid().color() if hover \
-            else palette.midlight().color()
-        p.setPen(QPen(border, 2 if selected else 1))
-        p.drawPath(frame)
+        self._frame(p, option, rect)
         cover = QRect(rect.left() + 1, rect.top() + 1, rect.width() - 2, int(rect.width() * self.view.cover_ratio))
         p.save()
         clip = QPainterPath()
@@ -223,6 +189,7 @@ class CardDelegate(QStyledItemDelegate):
         self._line(p, card.status, small, self._status_color(card, muted), x, y + 3, w)
 
     def _frame(self, p: QPainter, option, rect: QRect):
+        """White card, thin border; highlighted on hover – as the 3DS cards on My 3DS."""
         palette = option.palette
         selected = bool(option.state & QStyle.State_Selected)
         hover = bool(option.state & QStyle.State_MouseOver)
@@ -232,41 +199,6 @@ class CardDelegate(QStyledItemDelegate):
         border = palette.highlight().color() if selected or hover else palette.midlight().color()
         p.setPen(QPen(border, 2 if selected else 1))
         p.drawPath(frame)
-
-    def _paint_side_card(self, p: QPainter, option, card: Card):
-        """Picture on the left, name, facts, description and status beside it – the
-        look of the 3DS cards on My 3DS."""
-        text, muted = self._colors(option, card)
-        title_font, small = self._side_fonts()
-        width = self.view.card_width
-        rect = QRect(0, 0, width, self.card_height(width))
-        rect.moveCenter(option.rect.center())
-        self._frame(p, option, rect)
-        pad = self.SIDE_PAD
-        box_w = int(width * self.SIDE_PICTURE)
-        box = QRect(rect.left() + pad, rect.top() + pad, box_w, int(box_w * self.SIDE_RATIO))
-        if card.tint is not None:
-            path = QPainterPath()
-            path.addRoundedRect(box, 8, 8)
-            p.fillPath(path, card.tint)
-            self._draw_picture(p, card, box.adjusted(6, 6, -6, -6))
-        else:
-            self._draw_picture(p, card, box)
-        if card.badge:
-            self._badge(p, card.badge, box.topLeft() + QPoint(6, 6), small)
-        x = box.right() + pad
-        w = rect.right() - pad - x
-        y = rect.top() + pad - 2
-        y = self._line(p, card.title, title_font, text, x, y, w)
-        y = self._line(p, card.subtitle, small, muted, x, y + 2, w)
-        if self.view.with_text and card.text:
-            metrics = QFontMetrics(small)
-            p.setFont(small)
-            p.setPen(text)
-            p.drawText(QRect(x, y + 8, w, 3 * metrics.height()), Qt.AlignLeft | Qt.AlignTop,
-                       self._two_lines(card.text, metrics, w, 3))
-        status_y = rect.bottom() - pad - QFontMetrics(small).height() + 2
-        self._line(p, card.status, small, self._status_color(card, muted), x, status_y, w)
 
     def _paint_row(self, p: QPainter, option, card: Card):
         palette = option.palette
@@ -363,13 +295,12 @@ class CardView(QListView):
     card_context = Signal(object, object)  # key, global position
 
     def __init__(self, picture: Callable[[Card, QSize], QPixmap | None] = lambda card, size: None,
-                 cover_ratio: float = 0.75, with_text: bool = False, side: bool = False):
+                 cover_ratio: float = 0.75, with_text: bool = False):
         super().__init__()
         self.picture = picture
         self.cover_ratio = cover_ratio
         self.with_text = with_text
-        self.side = side  # cards with the picture beside the text, like the 3DS cards of My 3DS
-        self.zoom_range = (300, 760) if side else (140, 460)
+        self.zoom_range = (140, 460)
         self.mode = CARDS
         self.zoom = 220      # width of a card; the gaps between the columns take up the rest
         self.card_width = self.zoom
