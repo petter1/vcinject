@@ -554,9 +554,14 @@ def test_card_view_modes_zoom_and_clicks(tmp_path, monkeypatch):
     view.resize(860, 600)
     view.show()
     view.set_cards([Card(i, f"Game {i}", "GBA · 2003", "About it", "✓ Petter1") for i in range(12)])
-    assert view.mode == "cards" and view.cell_size().width() == (view.viewport().width() - 1) // 4
-    controls.zoom.setValue(400)                                   # stepless: fewer, wider cards
-    assert view.cell_size().width() == (view.viewport().width() - 1) // 2
+    available = view.viewport().width() - 1
+    assert view.mode == "cards" and view.cell_size().width() == available // (available // 216)
+    for zoom in (201, 202, 203):                                  # stepless: the card follows the slider,
+        controls.zoom.setValue(zoom)                              # the gaps give and take
+        cell = view.cell_size()
+        assert view.card_width == zoom and cell.width() - zoom >= 16
+    controls.zoom.setValue(400)                                   # fewer, wider cards
+    assert view.cell_size().width() == available // (available // 416)
     clicked = []
     view.card_clicked.connect(clicked.append)
     view.clicked.emit(view.model().index(3))

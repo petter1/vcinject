@@ -100,11 +100,12 @@ class CardDelegate(QStyledItemDelegate):
         return title, small
 
     def card_height(self, width: int) -> int:
+        """Height of a card ``width`` wide (without the space around it)."""
         title, small = self._fonts()
         lines = QFontMetrics(title).height() + 2 * QFontMetrics(small).height() + 6
         if self.view.with_text:
             lines += 2 * QFontMetrics(small).height() + 4
-        return int((width - 2 * self.GAP) * self.view.cover_ratio) + 2 * self.PAD + lines + 2 * self.GAP
+        return int(width * self.view.cover_ratio) + 2 * self.PAD + lines
 
     def row_height(self) -> int:
         return 64 if self.view.mode == ROWS else 34
@@ -158,7 +159,10 @@ class CardDelegate(QStyledItemDelegate):
         palette = option.palette
         text, muted = self._colors(option, card)
         title_font, small = self._fonts()
-        rect = option.rect.adjusted(self.GAP, self.GAP, -self.GAP, -self.GAP)
+        # the card follows the zoom exactly; the space around it takes up what is left
+        width = self.view.card_width
+        rect = QRect(0, 0, width, self.card_height(width))
+        rect.moveCenter(option.rect.center())
         selected = bool(option.state & QStyle.State_Selected)
         hover = bool(option.state & QStyle.State_MouseOver)
         frame = QPainterPath()
@@ -293,7 +297,8 @@ class CardView(QListView):
         self.cover_ratio = cover_ratio
         self.with_text = with_text
         self.mode = CARDS
-        self.zoom = 220      # width a card would like to have; the columns fill the rest
+        self.zoom = 220      # width of a card; the gaps between the columns take up the rest
+        self.card_width = self.zoom
         self.model_ = CardModel()
         self.setModel(self.model_)
         self.setItemDelegate(CardDelegate(self))
@@ -373,10 +378,14 @@ class CardView(QListView):
         self._apply_mode()
 
     def cell_size(self) -> QSize:
+        """The grid's cell: the card as wide as the zoom says (no steps), the columns that
+        fit, and the rest of the width shared out as gaps – vertically just as wide."""
+        gap = 2 * CardDelegate.GAP
         available = max(1, self.viewport().width() - 1)
-        columns = max(1, available // max(1, self.zoom))
+        self.card_width = max(60, min(self.zoom, available - gap))
+        columns = max(1, available // (self.card_width + gap))
         width = available // columns
-        return QSize(width, self.itemDelegate().card_height(width))
+        return QSize(width, self.itemDelegate().card_height(self.card_width) + width - self.card_width)
 
     def _apply_mode(self):
         # cards lie on the window's background, rows on a white table
