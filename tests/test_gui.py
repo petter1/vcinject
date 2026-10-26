@@ -527,3 +527,48 @@ def test_gallery_console_chips_switch_on_and_off(tmp_path, monkeypatch):
     assert not again._chips["gb"].isChecked()
     panel.stop()
     again.stop()
+
+
+def test_card_view_modes_zoom_and_clicks(tmp_path, monkeypatch):
+    monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path))
+    from vcinject.gui.cardview import Card, CardView, ViewControls
+
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    view = CardView(with_text=True)
+    controls = ViewControls("test", 200, [view])
+    view.resize(860, 600)
+    view.show()
+    view.set_cards([Card(i, f"Game {i}", "GBA · 2003", "About it", "✓ Petter1") for i in range(12)])
+    assert view.mode == "cards" and view.cell_size().width() == (view.viewport().width() - 1) // 4
+    controls.zoom.setValue(400)                                   # stepless: fewer, wider cards
+    assert view.cell_size().width() == (view.viewport().width() - 1) // 2
+    clicked = []
+    view.card_clicked.connect(clicked.append)
+    view.clicked.emit(view.model().index(3))
+    assert clicked == [3]
+    view.set_current(5)
+    view.set_cards([Card(i, f"Game {i}") for i in range(12)])    # new texts keep the selection
+    assert view.current_key() == 5
+    controls.set_mode("list")
+    assert view.mode == "list" and controls.zoom.isHidden()
+    assert ViewControls("test").mode == "list"                    # remembered
+
+
+def test_thumbnails_are_made_once(tmp_path, monkeypatch):
+    monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path))
+    from PySide6.QtCore import QBuffer
+    from PySide6.QtGui import QImage
+    from vcinject.gui.qtutil import thumbnail
+
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    big = QImage(1000, 500, QImage.Format_RGB32)
+    big.fill(0x336699)
+    buffer = QBuffer()
+    buffer.open(QBuffer.WriteOnly)
+    big.save(buffer, "PNG")
+    loads = []
+    load = lambda: loads.append(1) or bytes(buffer.data())  # noqa: E731
+    assert thumbnail("https://x/a.png", 300, load).size().toTuple() == (300, 150)
+    assert thumbnail("https://x/a.png", 300, load).width() == 300
+    assert loads == [1]                                           # the second came from the disk
+    assert thumbnail("https://x/none.png", 300, lambda: None).isNull()

@@ -3,20 +3,22 @@ status per 3DS, installed over Wi-Fi or by QR code –, the news of their releas
 and what the 3DS needs for injects."""
 from __future__ import annotations
 
+import queue
 import threading
 from dataclasses import dataclass, field
 
-from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
-from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QComboBox, QFrame, QGridLayout,
-                               QHBoxLayout, QLabel, QLineEdit, QListView, QListWidget,
-                               QListWidgetItem, QMenu, QPushButton, QScrollArea, QStackedWidget,
-                               QTabWidget, QToolButton, QVBoxLayout, QWidget)
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QImage, QPixmap
+from PySide6.QtWidgets import (QButtonGroup, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
+                               QMenu, QPushButton, QScrollArea, QStackedWidget, QTabWidget,
+                               QToolButton, QVBoxLayout, QWidget)
 
 from .. import forwarder, homebrew, installed, status, systems
 from ..errors import InjectError
 from . import wifi_install
 from .app import ThreeDsPreview, card
+from .cardview import BLUE, GREEN, Card, CardView, ViewControls
+from .qtutil import thumbnail
 
 REQUIREMENTS_HTML = """
 <p><b>Every inject</b> needs a 3DS with <a href="https://3ds.hacks.guide">Luma3DS</a>
@@ -35,8 +37,8 @@ Install <b>DSP1</b> below, start it once from the HOME Menu, done. RetroArch its
 </ul>
 """
 
-COVER = QSize(260, 130)
-TILE = 96
+PICTURE_WIDTH = 480   # pictures are kept at most this wide (memory)
+PICTURE_LOADERS = 4
 # the chips of the Apps tab: Recommended (vcinject's catalog), then Universal-DB's categories
 SHELVES = (("Recommended", None), ("All", ""), ("Games", "game"), ("Utilities", "utility"),
            ("Apps", "app"), ("Emulators", "emulator"), ("Media", "media"), ("Save tools", "save-tool"))
@@ -68,6 +70,11 @@ def _pixmap(data: bytes | None, size: QSize, enlarge: bool = True) -> QPixmap | 
     return pix.scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
 
+def _smaller(image: QImage) -> QImage:
+    return image.scaledToWidth(PICTURE_WIDTH, Qt.SmoothTransformation) \
+        if image.width() > PICTURE_WIDTH else image
+
+
 def _scroll(widget: QWidget) -> QScrollArea:
     area = QScrollArea(widgetResizable=True, frameShape=QFrame.NoFrame)
     area.setWidget(widget)
@@ -83,8 +90,9 @@ class HomebrewPage(QWidget):
     _progress = Signal(str, str)       # app key, "Installing… 40 %"
     _downloaded = Signal(str, object, str)  # app key, Path or None, error (QR)
     _store_loaded = Signal(object)     # [homebrew.StoreApp] or None
-    _tile_icon = Signal(str, object)   # slug, icon bytes
+    _picture_ready = Signal(str, object)  # url, QImage (null when there is none)
     _store_version = Signal(str, int)  # slug, newest version (from its .cia)
+    _store_art = Signal(str, object, object)  # shown page, icon bytes, cover bytes
 
     def __init__(self, main):
         super().__init__()
@@ -98,6 +106,8 @@ class HomebrewPage(QWidget):
         self._done.connect(self._install_done)
         self._progress.connect(self._show_progress)
         self._downloaded.connect(self._serve)
+        # many things arrive at once (apps, versions, consoles): the page is updated once after
+        self._refresh_timer = QTimer(self, singleShot=True, interval=80, timeout=self._refresh_now)
         self.watcher.changed.connect(lambda _c: self._refresh_apps())
         self.watcher.installed_changed.connect(self._refresh_apps)
 
@@ -111,20 +121,23 @@ class HomebrewPage(QWidget):
         head.addWidget(subtitle, 1)
         head.addWidget(self.update_all)
 
-        self.grid = QGridLayout()
-        self.grid.setSpacing(16)
-        grid_widget = QWidget()
-        grid_box = QVBoxLayout(grid_widget)
-        grid_box.addLayout(self.grid)
-        grid_box.addStretch(1)
         self.detail = QWidget()
         self.detail_layout = QVBoxLayout(self.detail)
         self.store: list[homebrew.StoreApp] = []
         self.store_versions: dict[str, int] = {}   # slug -> newest version
-        self.store_icons: dict[str, bytes] = {}
         self._store_loaded.connect(self._show_store)
-        self._tile_icon.connect(self._icon_arrived)
         self._store_version.connect(self._version_arrived)
+        self._store_art.connect(self._store_art_arrived)
+        # pictures of the cards: loaded when a card is first painted, the newest wish first
+        self._pictures: dict[str, QPixmap] = {}
+        self._wanted: set[str] = set()
+        self._picture_queue: queue.LifoQueue = queue.LifoQueue()
+        self._picture_ready.connect(self._picture_arrived)
+        self._repaint_timer = QTimer(self, singleShot=True, interval=60,
+                                     timeout=lambda: self.cards.repaint_cards())
+        for _ in range(PICTURE_LOADERS):
+            threading.Thread(target=self._picture_worker, daemon=True).start()
+        self._versions: dict[str, dict[int, int]] = {}  # console name -> installed versions
         chips = QHBoxLayout()
         self.shelf = QButtonGroup(self)
         for index, (label, _category) in enumerate(SHELVES):
@@ -134,34 +147,29 @@ class HomebrewPage(QWidget):
         self.shelf.idClicked.connect(lambda _id: self._fill_store())
         chips.addStretch(1)
         self.store_search = QLineEdit(placeholderText="Search all homebrew", clearButtonEnabled=True)
+        self.store_search.setMinimumWidth(160)
         self.store_search.setMaximumWidth(220)
         self.store_search.textChanged.connect(self._search_typed)
         self.store_sort = QComboBox()
         for label in ("Popular", "Recently updated", "Name"):
             self.store_sort.addItem(label)
         self.store_sort.currentIndexChanged.connect(lambda _i: self._fill_store())
+        # every shelf as the same cards (or rows), like the games and the titles on a 3DS
+        self.cards = CardView(self._card_picture, cover_ratio=0.5, with_text=True)
+        self.cards.card_clicked.connect(self._open_card)
+        self.cards.card_activated.connect(self._open_card)
+        self.cards.card_context.connect(self._card_menu)
+        self.view_controls = ViewControls("homebrew", 260, [self.cards])
         chips.addWidget(self.store_search)
         chips.addWidget(self.store_sort)
-        self.tiles = QListWidget()
-        self.tiles.setViewMode(QListView.IconMode)
-        self.tiles.setIconSize(QSize(TILE, TILE))
-        self.tiles.setGridSize(QSize(TILE + 44, TILE + 48))
-        self.tiles.setResizeMode(QListView.Adjust)
-        self.tiles.setMovement(QListView.Static)
-        self.tiles.setWordWrap(True)
-        self.tiles.setUniformItemSizes(True)
-        self.tiles.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
-        self.tiles.itemClicked.connect(lambda item: self.show_store_app(item.data(Qt.UserRole)))
-        self.shelves = QStackedWidget()
-        self.shelves.addWidget(_scroll(grid_widget))
-        self.shelves.addWidget(self.tiles)
+        chips.addWidget(self.view_controls)
         credit = QLabel(CREDIT, wordWrap=True, openExternalLinks=True, objectName="muted")
         credit.setTextFormat(Qt.RichText)
         browse = QWidget()
         browse_layout = QVBoxLayout(browse)
         browse_layout.setContentsMargins(0, 8, 0, 0)
         browse_layout.addLayout(chips)
-        browse_layout.addWidget(self.shelves, 1)
+        browse_layout.addWidget(self.cards, 1)
         browse_layout.addWidget(credit)
         self.apps_stack = QStackedWidget()
         self.apps_stack.addWidget(browse)
@@ -259,13 +267,10 @@ class HomebrewPage(QWidget):
     # --- the apps ------------------------------------------------------------------
 
     def _refresh_apps(self):
-        while self.grid.count():
-            widget = self.grid.takeAt(0).widget()
-            if widget:
-                widget.setParent(None)
-                widget.deleteLater()
-        for index, data in enumerate(self.apps.values()):
-            self.grid.addWidget(self._card(data), index // 3, index % 3)
+        self._refresh_timer.start()
+
+    def _refresh_now(self):
+        self._fill_store()
         updates = sum(len(self._needing(d)[0]) for d in self.apps.values()) + sum(
             len(self._store_status(a)[1]) for a in self.store if a.allowed and a.slug in self.store_versions)
         self.update_all.setText(f"Update all ({updates})")
@@ -275,10 +280,9 @@ class HomebrewPage(QWidget):
                 self.show_store_app(self.shown[6:])
             else:
                 self.show_app(self.shown)
-
     def _status_html(self, data: AppData) -> str:
         if data.error:
-            return f"<span style='color:gray'>Not available right now</span>"
+            return "<span style='color:gray'>Not available right now</span>"
         if data.release is None:
             return "<span style='color:gray'>Looking up the newest version…</span>"
         if not data.release.allowed:
@@ -339,48 +343,121 @@ class HomebrewPage(QWidget):
             button.clicked.connect(lambda: self.install_over_wifi(key, default, fetch))
         return button
 
-    def _card(self, data: AppData) -> QFrame:
-        frame = QFrame(objectName="card")
-        frame.setCursor(Qt.PointingHandCursor)
-        frame.mousePressEvent = lambda _event, key=data.app.key: self.show_app(key)
-        box = QVBoxLayout(frame)
-        box.setContentsMargins(14, 14, 14, 14)
-        cover = QLabel(alignment=Qt.AlignCenter)
-        cover.setFixedHeight(COVER.height())
-        pix = _pixmap(data.cover, COVER)
-        if pix:
-            cover.setPixmap(pix)
-        else:
-            cover.setText(data.app.name)
-            cover.setStyleSheet("background: #3D2A99; color: white; font-size: 20px; font-weight: 700;"
-                                " border-radius: 8px;")
-        box.addWidget(cover)
-        head = QHBoxLayout()
-        icon = QLabel()
-        icon.setFixedSize(48, 48)
-        icon_pix = _pixmap(data.icon, QSize(48, 48))
-        if icon_pix:
-            icon.setPixmap(icon_pix)
-        head.addWidget(icon)
-        facts = []
-        if data.release:
-            facts += [data.release.tag, data.release.licence]
-        if data.info.author:
-            facts.append(data.info.author)
-        name = QLabel(f"<span style='font-size:15px; font-weight:700'>{data.app.name}</span><br>"
-                      f"<span style='color:gray'>{' · '.join(facts)}</span>")
-        head.addWidget(name, 1)
-        box.addLayout(head)
-        about = QLabel(data.info.description or data.app.purpose, wordWrap=True)
-        about.setMinimumHeight(34)
-        box.addWidget(about)
-        state = QLabel(self._status_html(data), wordWrap=True)
-        state.setTextFormat(Qt.RichText)
-        box.addWidget(state)
-        box.addStretch(1)
-        box.addWidget(self._action(data))
-        return frame
+    # --- the cards ----------------------------------------------------------------------
 
+    def _short_status(self, ids, newest: int | None) -> tuple[str, str]:
+        """What a card says about the 3DSs: where it is (green) or needs an update (blue)."""
+        have, old = [], []
+        for name, versions in self._versions.items():
+            version = next((versions[i] for i in ids if i in versions), None)
+            if version is None:
+                continue
+            (old if newest is not None and 0 <= version < newest else have).append(name)
+        if old:
+            return f"↑ Update for {', '.join(old)}", BLUE
+        if have:
+            return f"✓ {', '.join(have)}", GREEN
+        return "", ""
+
+    def _app_card(self, data: AppData) -> Card:
+        key = data.app.key
+        facts = [data.info.author] if data.info.author else []
+        if data.release:
+            facts.append(data.release.tag)
+        if self.state.get(key):
+            line, color = self.state[key], BLUE
+        elif data.error:
+            line, color = "Not available right now", ""
+        elif data.release is None:
+            line, color = "Looking up the newest version…", ""
+        else:
+            line, color = self._short_status((data.title_id,) if data.title_id else (),
+                                             data.version if data.release.allowed else None)
+        return Card(f"app:{key}", data.app.name, " · ".join(facts),
+                    data.info.description or data.app.purpose, line, color,
+                    badge="NEEDED" if data.app.needed_for else "", tint=QColor("#3D2A99"),
+                    tooltip=data.app.purpose, data=data)
+
+    def _store_card(self, app: homebrew.StoreApp) -> Card:
+        key = f"store:{app.slug}"
+        if self.state.get(key):
+            line, color = self.state[key], BLUE
+        else:
+            line, color = self._short_status(app.title_ids, self.store_versions.get(app.slug))
+        tint = QColor(app.color) if app.color.startswith("#") else QColor(90, 80, 140)
+        facts = [f for f in (app.author, app.version) if f]
+        return Card(key, app.title, " · ".join(facts), app.description, line, color,
+                    tint=tint.darker(160), tooltip=f"{app.title} – {app.author}\n{app.description}",
+                    data=app)
+
+    def _card_picture(self, card_: Card, _size: QSize) -> QPixmap | None:
+        """The cover (or else the icon) of a card; what is not there yet is fetched."""
+        if isinstance(card_.data, AppData):
+            data = card_.data
+            key = f"{card_.key}:{len(data.cover or data.icon or b'')}"
+            if key not in self._pictures:
+                image = QImage()
+                if image.loadFromData(data.cover or data.icon or b""):
+                    self._pictures[key] = QPixmap.fromImage(_smaller(image))
+                else:
+                    return None
+            return self._pictures[key]
+        app: homebrew.StoreApp = card_.data
+        # a small square (rows) shows the icon, a card the picture
+        urls = (app.icon_url, app.image_url) if _size.width() < 100 else (app.image_url, app.icon_url)
+        for url in urls:
+            if url and url not in self._pictures and url not in self._wanted:
+                self._wanted.add(url)
+                self._picture_queue.put(url)
+        for url in urls:
+            pix = self._pictures.get(url)
+            if pix is not None and not pix.isNull():
+                return pix
+        return None
+
+    def _picture_worker(self):
+        while True:
+            url = self._picture_queue.get()
+            try:
+                image = thumbnail(url, PICTURE_WIDTH, lambda: homebrew.picture(url))
+            except (InjectError, OSError, ValueError):
+                image = QImage()
+            try:
+                self._picture_ready.emit(url, image)
+            except RuntimeError:  # the page is gone
+                return
+
+    def _picture_arrived(self, url: str, image: QImage):
+        self._pictures[url] = QPixmap.fromImage(image) if not image.isNull() else QPixmap()
+        self._repaint_timer.start()
+
+    def _open_card(self, key):
+        if not key:
+            return
+        kind, _, name = key.partition(":")
+        if kind == "app":
+            self.show_app(name)
+        else:
+            self.show_store_app(name)
+
+    def _card_menu(self, key, at):
+        """Right click on a card: open it, or install it like the button on its page."""
+        kind, _, name = key.partition(":")
+        if kind == "app":
+            button = self._action(self.apps[name])
+        else:
+            app = self._store_app(name)
+            _line, outdated, missing = self._store_status(app)
+            button = self._store_action(app, outdated, missing)
+        menu = QMenu(self)
+        menu.addAction("Open", lambda: self._open_card(key))
+        if button.isEnabled():
+            menu.addSeparator()
+            menu.addAction(button.text(), button.click)
+            for action in button.menu().actions():
+                menu.addAction(action)
+        menu.exec(at)
+        button.deleteLater()
     def show_app(self, key: str):
         """The app's own page: big cover, the long description, screenshots, status."""
         data = self.apps[key]
@@ -458,13 +535,15 @@ class HomebrewPage(QWidget):
         self.preview_icon = icon
         self.preview.update_art(image(icon) or Image.new("RGBA", (48, 48), "#3D2A99"), image(banner), title)
 
-    def _add_shot(self, key: str, image):
-        if key == f"cover:{self.shown}":
-            pix = _pixmap(image, QSize(520, 260), enlarge=False)
-            if pix:
-                self.store_cover.setPixmap(pix)
-            self._show_preview(self.preview_icon, image, self.preview.title)
+    def _store_art_arrived(self, shown: str, icon, cover):
+        if shown != self.shown:
             return
+        pix = _pixmap(cover or None, QSize(520, 260), enlarge=False)
+        if pix:
+            self.store_cover.setPixmap(pix)
+        self._show_preview(icon or None, cover or None, self.preview.title)
+
+    def _add_shot(self, key: str, image):
         if key != self.shown or not hasattr(self, "shots"):
             return
         pix = _pixmap(image, QSize(240, 180))
@@ -498,13 +577,6 @@ class HomebrewPage(QWidget):
         curated = {a.repo.lower() for a in homebrew.CATALOG}
         self.store = [a for a in apps or [] if a.source.lower().split("github.com/")[-1] not in curated]
         self._fill_store()
-        threading.Thread(target=self._load_icons, daemon=True).start()
-
-    def _load_icons(self):
-        for app in list(self.store):
-            data = homebrew.picture(app.icon_url) if app.icon_url else None
-            if data:
-                self._tile_icon.emit(app.slug, data)
 
     def _search_typed(self, text: str):
         if text and self.shelf.checkedId() == 0:  # searching means all homebrew
@@ -512,10 +584,14 @@ class HomebrewPage(QWidget):
         self._fill_store()
 
     def _fill_store(self):
-        shelf = max(0, self.shelf.checkedId())
-        category = SHELVES[shelf][1]
-        self.shelves.setCurrentIndex(0 if category is None else 1)
+        self._versions = {}
+        known = {c.key: c.label for c in installed.known_consoles()}
+        known.update({c.key: c.label for c in self.watcher.consoles})
+        for key, label in sorted(known.items(), key=lambda kv: kv[1].lower()):
+            self._versions[label.split(" (")[0]] = installed.versions(key)
+        category = SHELVES[max(0, self.shelf.checkedId())][1]
         if category is None:
+            self.cards.set_cards([self._app_card(d) for d in self.apps.values()])
             return
         words = self.store_search.text().lower().split()
         apps = [a for a in self.store if (not category or category in a.categories)
@@ -524,53 +600,12 @@ class HomebrewPage(QWidget):
             apps.sort(key=lambda a: a.updated, reverse=True)
         elif self.store_sort.currentIndex() == 2:
             apps.sort(key=lambda a: a.title.lower())
-        self.tiles.clear()
-        on = self._on_ids = self._installed_ids()
-        for app in apps:
-            item = QListWidgetItem(QIcon(self._tile(app, bool(set(app.title_ids) & on))), app.title)
-            item.setData(Qt.UserRole, app.slug)
-            item.setToolTip(f"{app.title} – {app.author}\n{app.description}")
-            self.tiles.addItem(item)
-
-    @staticmethod
+        self.cards.set_cards([self._store_card(a) for a in apps])
     def _installed_ids() -> set[int]:
         ids = set()
         for console in installed.known_consoles():
             ids |= set(installed.versions(console.key))
         return ids
-
-    def _tile(self, app: homebrew.StoreApp, on_a_3ds: bool) -> QPixmap:
-        pix = QPixmap(TILE, TILE)
-        pix.fill(Qt.transparent)
-        p = QPainter(pix)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor(app.color) if app.color.startswith("#") else QColor(90, 80, 140))
-        p.drawRoundedRect(0, 0, TILE, TILE, 14, 14)
-        icon = _pixmap(self.store_icons.get(app.slug), QSize(64, 64))
-        if icon:
-            p.drawPixmap((TILE - icon.width()) // 2, (TILE - icon.height()) // 2, icon)
-        else:
-            p.setPen(QColor("white"))
-            p.setFont(QFont(p.font().family(), 22, QFont.Bold))
-            p.drawText(pix.rect(), Qt.AlignCenter, app.title[:2])
-        if on_a_3ds:  # installed on one of the 3DSs
-            p.setPen(Qt.NoPen)
-            p.setBrush(QColor("#1E9E5A"))
-            p.drawEllipse(TILE - 26, 6, 20, 20)
-            p.setPen(QColor("white"))
-            p.setFont(QFont(p.font().family(), 11, QFont.Bold))
-            p.drawText(TILE - 26, 6, 20, 20, Qt.AlignCenter, "✓")
-        p.end()
-        return pix
-
-    def _icon_arrived(self, slug: str, data: bytes):
-        self.store_icons[slug] = data
-        for row in range(self.tiles.count()):
-            item = self.tiles.item(row)
-            if item.data(Qt.UserRole) == slug:
-                app = self._store_app(slug)
-                item.setIcon(QIcon(self._tile(app, bool(set(app.title_ids) & getattr(self, "_on_ids", set())))))
 
     def _version_arrived(self, slug: str, version: int):
         self.store_versions[slug] = version
@@ -614,11 +649,11 @@ class HomebrewPage(QWidget):
         self.detail_layout.addWidget(back, alignment=Qt.AlignLeft)
         self.store_cover = QLabel()
         self.detail_layout.addWidget(self.store_cover)
-        self._show_preview(self.store_icons.get(slug), None, app.title)
-        if app.image_url:
-            threading.Thread(target=lambda: self._shot_loaded.emit(f"cover:{self.shown}",
-                                                                    homebrew.picture(app.image_url)),
-                             daemon=True).start()
+        self._show_preview(None, None, app.title)
+        shown = self.shown
+        threading.Thread(target=lambda: self._store_art.emit(
+            shown, app.icon_url and homebrew.picture(app.icon_url),
+            app.image_url and homebrew.picture(app.image_url)), daemon=True).start()
         facts = [f"by {app.author}"] if app.author else []
         facts += [app.version, f"licence {app.licence or 'unknown'}", f"★ {app.stars}", f"updated {app.updated}"]
         heading = QLabel(f"<span style='font-size:24px; font-weight:700'>{app.title}</span>"

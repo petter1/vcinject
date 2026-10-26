@@ -59,6 +59,11 @@ QLabel#cardTitle { font-weight: 600; font-size: 13px; }
 QLabel#muted { color: palette(placeholder-text); }
 QLabel#dropHint { color: palette(placeholder-text); font-size: 13px; }
 QFrame#hero { background: transparent; border: none; }
+QListView#cardGrid { background: transparent; border: none; }
+QListView#cardRows { background: palette(base); border: 1px solid palette(midlight); border-radius: 8px; }
+QToolButton#viewMode { border: 1px solid transparent; border-radius: 6px; padding: 2px 7px; font-size: 15px; }
+QToolButton#viewMode:checked { background: palette(highlight); color: palette(highlighted-text); }
+QToolButton#viewMode:hover:!checked { border-color: palette(mid); }
 QLabel#gameTitle { font-size: 24px; font-weight: 700; }
 QPushButton#primary {
     background: palette(highlight); color: palette(highlighted-text); border: none;

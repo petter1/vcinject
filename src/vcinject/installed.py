@@ -33,20 +33,29 @@ def remember(console: remote.Console, titles: list[remote.Title]) -> None:
                                 "at": time.time(),
                                 "ids": sorted(f"{t.id:016X}" for t in titles if t.is_app),
                                 "versions": {f"{t.id:016X}": t.version for t in titles if t.is_app}}))
-    _cache.pop("stamp", None)
+    _cache.clear()
 
 
 _cache: dict = {}
+_LOOK_AGAIN = 2.0  # seconds a look into the folder is trusted (pages ask thousands of times)
+
+
+def _files() -> list:
+    folder = data_dir() / "3ds"
+    now = time.monotonic()
+    if _cache.get("folder") != folder or now - _cache.get("looked", -_LOOK_AGAIN) >= _LOOK_AGAIN:
+        files = sorted(folder.glob("*/titles.json")) if folder.is_dir() else []
+        _cache.update(folder=folder, looked=now,
+                      files=[(f, f.stat().st_mtime) for f in files])
+    return _cache["files"]
 
 
 def _known() -> dict[Console, set[int]]:
     """Every 3DS with a remembered title list, and those titles."""
-    folder = data_dir() / "3ds"
-    files = sorted(folder.glob("*/titles.json")) if folder.is_dir() else []
-    stamp = tuple((str(f), f.stat().st_mtime) for f in files)
+    stamp = tuple(_files())
     if "known" not in _cache or _cache.get("stamp") != stamp:
         known = {}
-        for path in files:
+        for path, _mtime in stamp:
             try:
                 data = json.loads(path.read_text())
                 console = Console(path.parent.name, data["label"], data["short"])
@@ -61,13 +70,18 @@ def versions(key: str) -> dict[int, int]:
     """Title ID -> installed version of the games and apps on a console (as last read;
     -1 when only the ID is known)."""
     path = data_dir() / "3ds" / key / "titles.json"
+    stamp = next((m for f, m in _files() if f == path), None)
+    cached = _cache.setdefault("versions", {}).get(path)
+    if cached is not None and cached[0] == stamp:
+        return dict(cached[1])
     try:
         data = json.loads(path.read_text())
     except (OSError, ValueError):
         return {}
     found = {int(i, 16): -1 for i in data.get("ids", [])}  # installed, version not read yet
     found.update({int(i, 16): v for i, v in data.get("versions", {}).items()})
-    return found
+    _cache["versions"][path] = (stamp, found)
+    return dict(found)
 
 
 def known_consoles() -> list[Console]:
