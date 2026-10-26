@@ -76,8 +76,9 @@ def _smaller(image: QImage) -> QImage:
 
 
 def _scroll(widget: QWidget) -> QScrollArea:
-    area = QScrollArea(widgetResizable=True, frameShape=QFrame.NoFrame)
+    area = QScrollArea(widgetResizable=True, frameShape=QFrame.NoFrame, objectName="plainScroll")
     area.setWidget(widget)
+    widget.setObjectName("plainScrollContent")  # both see through to the light box
     area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
     return area
 
@@ -85,7 +86,7 @@ def _scroll(widget: QWidget) -> QScrollArea:
 class HomebrewPage(QWidget):
     _loaded = Signal(object)           # AppData
     _news_loaded = Signal(object)      # [homebrew.News]
-    _shot_loaded = Signal(str, object)  # app key, image bytes
+    _shot_loaded = Signal(str, object)  # app key, (index, image bytes)
     _done = Signal(str, str)           # app key, what happened
     _progress = Signal(str, str)       # app key, "Installing… 40 %"
     _downloaded = Signal(str, object, str)  # app key, Path or None, error (QR)
@@ -180,9 +181,34 @@ class HomebrewPage(QWidget):
         self.apps_stack = QStackedWidget()
         self.apps_stack.addWidget(browse)
         # an app's page like a game's: what it is on the left, how it looks on the 3DS right
+        # the right card: the 3DS preview, or a screenshot chosen on the left, in its place
         self.preview = ThreeDsPreview()
         preview_card, preview_layout = card("Preview")
-        preview_layout.addWidget(self.preview, alignment=Qt.AlignHCenter)
+        self.showcase_title = preview_layout.itemAt(0).widget()
+        self.screenshot = QLabel(alignment=Qt.AlignCenter)
+        self.screenshot.setFixedSize(self.preview.size())
+        self.showcase = QStackedWidget()
+        self.showcase.addWidget(self.preview)
+        self.showcase.addWidget(self.screenshot)
+        self.showcase.setFixedSize(self.preview.size())
+        preview_layout.addWidget(self.showcase, alignment=Qt.AlignHCenter)
+        steps = QHBoxLayout()
+        self.back_to_preview = QPushButton("◀  3DS preview", objectName="link",
+                                           clicked=lambda: self._show_shot(None))
+        self.shot_prev = QToolButton(text="‹", autoRaise=True, clicked=lambda: self._step_shot(-1))
+        self.shot_next = QToolButton(text="›", autoRaise=True, clicked=lambda: self._step_shot(1))
+        steps.addWidget(self.back_to_preview)
+        steps.addStretch(1)
+        steps.addWidget(self.shot_prev)
+        steps.addWidget(self.shot_next)
+        self.shot_steps = QWidget()
+        self.shot_steps.setLayout(steps)
+        self.shot_steps.setVisible(False)
+        preview_layout.addWidget(self.shot_steps)
+        self._shot_images: dict[int, bytes] = {}   # index -> screenshot of the app shown
+        self._shot_labels: dict[int, QLabel] = {}
+        self._shot_index: int | None = None
+        self._shots_of: str | None = None
         right = QVBoxLayout()
         right.addWidget(preview_card)
         right.addStretch(1)
@@ -517,15 +543,31 @@ class HomebrewPage(QWidget):
                         child.setParent(None)
 
     def _add_screenshots(self, key: str, shots: tuple):
+        if self._shots_of != key:  # another app: its preview first
+            self._shots_of = key
+            self._shot_images = {}
+            self._show_shot(None)
+        self._shot_labels = {}
         if not shots:
             return
         self.shots = QHBoxLayout()
         self.shots.setSpacing(10)
-        self.detail_layout.addWidget(QLabel("<b>Screenshots</b>"))
+        self.detail_layout.addWidget(QLabel("<b>Screenshots</b> <span style='color:gray'>"
+                                            "– click one to see it big</span>"))
         self.detail_layout.addLayout(self.shots)
-        for _text, url in shots[:6]:
-            threading.Thread(target=lambda url=url: self._shot_loaded.emit(key, homebrew.picture(url)),
-                             daemon=True).start()
+        for index, (_text, url) in enumerate(shots[:6]):
+            label = QLabel(alignment=Qt.AlignCenter, cursor=Qt.PointingHandCursor)
+            label.setFixedSize(QSize(120, 120))
+            label.mousePressEvent = lambda _event, i=index: self._show_shot(i)
+            self._shot_labels[index] = label
+            self.shots.addWidget(label)
+            if index in self._shot_images:
+                self._shot_loaded.emit(key, (index, self._shot_images[index]))
+            else:
+                threading.Thread(target=lambda url=url, i=index: self._shot_loaded.emit(
+                    key, (i, homebrew.picture(url))), daemon=True).start()
+        self.shots.addStretch(1)
+        self._mark_shot()
 
     def _show_preview(self, icon: bytes | None, banner: bytes | None, title: str):
         """The app's icon in the HOME Menu and its picture on the top screen."""
@@ -550,14 +592,56 @@ class HomebrewPage(QWidget):
             self.store_cover.setPixmap(pix)
         self._show_preview(icon or None, cover or None, self.preview.title)
 
-    def _add_shot(self, key: str, image):
-        if key != self.shown or not hasattr(self, "shots"):
+    def _add_shot(self, key: str, loaded):
+        index, image = loaded
+        if key != self.shown or not image:
             return
-        pix = _pixmap(image, QSize(240, 180))
-        if pix:
-            label = QLabel()
+        self._shot_images[index] = image
+        label = self._shot_labels.get(index)
+        pix = _pixmap(image, QSize(116, 116))
+        if label is not None and pix:
             label.setPixmap(pix)
-            self.shots.addWidget(label)
+        if index == self._shot_index:
+            self._show_shot(index)
+
+    def _show_shot(self, index: int | None):
+        """A screenshot big where the 3DS preview is (None: the preview again)."""
+        if index is not None and index not in self._shot_images:
+            index = None if not self._shot_labels else index  # still loading: shown on arrival
+        self._shot_index = index
+        if index is None or index not in self._shot_images:
+            self.showcase.setCurrentWidget(self.preview)
+            self.showcase_title.setText("Preview")
+            self.shot_steps.setVisible(index is not None)
+            self._mark_shot()
+            return
+        image = QImage()
+        image.loadFromData(self._shot_images[index])
+        area = self.screenshot.size()
+        factor = min(area.width() / max(1, image.width()), area.height() / max(1, image.height()))
+        if factor >= 2:  # pixel art (3DS screens are small): whole steps, no blur
+            whole = int(factor)
+            pix = QPixmap.fromImage(image.scaled(image.width() * whole, image.height() * whole,
+                                                 Qt.KeepAspectRatio, Qt.FastTransformation))
+        else:
+            pix = QPixmap.fromImage(image).scaled(area, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.screenshot.setPixmap(pix)
+        self.showcase.setCurrentWidget(self.screenshot)
+        self.showcase_title.setText(f"Screenshot {index + 1} of {len(self._shot_labels)}")
+        self.shot_steps.setVisible(True)
+        self.shot_prev.setEnabled(index > 0)
+        self.shot_next.setEnabled(index + 1 < len(self._shot_labels))
+        self._mark_shot()
+
+    def _step_shot(self, step: int):
+        if self._shot_index is not None:
+            self._show_shot(max(0, min(len(self._shot_labels) - 1, self._shot_index + step)))
+
+    def _mark_shot(self):
+        for index, label in self._shot_labels.items():
+            chosen = index == self._shot_index
+            label.setStyleSheet("border: 2px solid palette(highlight); border-radius: 6px;" if chosen
+                                else "border: 2px solid transparent;")
 
     # --- all homebrew (Universal-DB) ---------------------------------------------------
 

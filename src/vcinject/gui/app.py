@@ -62,9 +62,15 @@ QFrame#hero { background: transparent; border: none; }
 QFrame#deviceCard { background: palette(base); border: 1px solid palette(midlight); border-radius: 10px; }
 QFrame#deviceCard:hover { border: 1px solid palette(highlight); }
 QListView#cardGrid { background: transparent; border: none; }
-QTabWidget::pane, QFrame#contentBox { background: rgba(255, 255, 255, 0.45);
+QTabWidget::pane, QFrame#contentBox { background: rgba(0, 0, 0, 0.045);
     border: 1px solid palette(midlight); border-radius: 10px; }
 QTabWidget::pane { top: -1px; }
+QTabBar::tab { background: transparent; border: 1px solid transparent; border-bottom: none;
+    border-top-left-radius: 8px; border-top-right-radius: 8px; padding: 5px 14px; margin-right: 2px;
+    color: palette(placeholder-text); }
+QTabBar::tab:selected { background: rgba(0, 0, 0, 0.045); border-color: palette(midlight); color: palette(text); }
+QTabBar::tab:hover:!selected { color: palette(text); }
+QScrollArea#plainScroll, QWidget#plainScrollContent { background: transparent; }
 QListView#cardRows { background: palette(base); border: 1px solid palette(midlight); border-radius: 8px; }
 QToolButton#viewMode { border: 1px solid transparent; border-radius: 6px; padding: 2px 7px; font-size: 15px; }
 QToolButton#viewMode:checked { background: palette(highlight); color: palette(highlighted-text); }

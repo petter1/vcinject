@@ -616,3 +616,34 @@ def test_console_colour_is_chosen_per_3ds(tmp_path, monkeypatch):
     assert console_view.DevicesPage()._picture(petter.key, "3DS XL") is not None
     ConsoleWatcher.shared()._update([])
     ConsoleWatcher.shared()._seen.clear()
+
+
+def test_screenshot_shown_where_the_preview_is(tmp_path, monkeypatch):
+    monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path))
+    from PySide6.QtCore import QBuffer
+    from PySide6.QtGui import QImage
+    from vcinject import homebrew
+    from vcinject.gui import homebrew_view
+
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    shot = QImage(400, 480, QImage.Format_RGB32)
+    shot.fill(0xAA2222)
+    buffer = QBuffer()
+    buffer.open(QBuffer.WriteOnly)
+    shot.save(buffer, "PNG")
+    monkeypatch.setattr(homebrew, "picture", lambda url: bytes(buffer.data()) if url else None)
+    page = homebrew_view.HomebrewPage(None)
+    key = next(iter(page.apps))
+    page.shown = key
+    page._clear_detail()
+    page._add_screenshots(key, (("one", "u1"), ("two", "u2")))
+    for index in (0, 1):                                                   # as the loaders bring them
+        page._add_shot(key, (index, bytes(buffer.data())))
+    assert page.showcase.currentWidget() is page.preview                   # the 3DS preview first
+    page._shot_labels[1].mousePressEvent(None)                             # a click on the second
+    assert page.showcase.currentWidget() is page.screenshot
+    assert page.showcase_title.text() == "Screenshot 2 of 2" and not page.shot_next.isEnabled()
+    page._step_shot(-1)
+    assert page.showcase_title.text() == "Screenshot 1 of 2"
+    page.back_to_preview.click()
+    assert page.showcase.currentWidget() is page.preview and page.showcase_title.text() == "Preview"
