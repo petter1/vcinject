@@ -13,6 +13,10 @@ from PySide6.QtGui import QImage, QPixmap
 from ..template import data_dir
 
 
+# space inside the light box that holds a page's content (tab panes, the games gallery)
+CONTENT_MARGIN = 12
+
+
 def gui_settings() -> QSettings:
     """GUI preferences. With VCINJECT_DATA_DIR set (tests, portable use) they live in
     that folder instead of the user's system-wide preferences."""

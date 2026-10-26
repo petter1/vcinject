@@ -62,6 +62,9 @@ QFrame#hero { background: transparent; border: none; }
 QFrame#deviceCard { background: palette(base); border: 1px solid palette(midlight); border-radius: 10px; }
 QFrame#deviceCard:hover { border: 1px solid palette(highlight); }
 QListView#cardGrid { background: transparent; border: none; }
+QTabWidget::pane, QFrame#contentBox { background: rgba(255, 255, 255, 0.45);
+    border: 1px solid palette(midlight); border-radius: 10px; }
+QTabWidget::pane { top: -1px; }
 QListView#cardRows { background: palette(base); border: 1px solid palette(midlight); border-radius: 8px; }
 QToolButton#viewMode { border: 1px solid transparent; border-radius: 6px; padding: 2px 7px; font-size: 15px; }
 QToolButton#viewMode:checked { background: palette(highlight); color: palette(highlighted-text); }

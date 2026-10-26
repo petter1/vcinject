@@ -18,7 +18,7 @@ from ..errors import InjectError
 from . import wifi_install
 from .app import ThreeDsPreview, card
 from .cardview import BLUE, GREEN, Card, CardView, ViewControls
-from .qtutil import thumbnail
+from .qtutil import CONTENT_MARGIN, thumbnail
 
 REQUIREMENTS_HTML = """
 <p><b>Every inject</b> needs a 3DS with <a href="https://3ds.hacks.guide">Luma3DS</a>
@@ -123,6 +123,7 @@ class HomebrewPage(QWidget):
 
         self.detail = QWidget()
         self.detail_layout = QVBoxLayout(self.detail)
+        self.detail_layout.setContentsMargins(*[CONTENT_MARGIN] * 4)
         self.store: list[homebrew.StoreApp] = []
         self.store_versions: dict[str, int] = {}   # slug -> newest version
         self._store_loaded.connect(self._show_store)
@@ -161,14 +162,19 @@ class HomebrewPage(QWidget):
         self.cards.card_context.connect(self._card_menu)
         self.view_controls = ViewControls("homebrew", 260, [self.cards])
         chips.addWidget(self.store_search)
-        chips.addWidget(self.store_sort)
-        chips.addWidget(self.view_controls)
+        # second row, as on Games: how many, then sorting and the look
+        self.shelf_count = QLabel(objectName="muted")
+        second = QHBoxLayout()
+        second.addWidget(self.shelf_count, 1)
+        second.addWidget(self.store_sort)
+        second.addWidget(self.view_controls)
         credit = QLabel(CREDIT, wordWrap=True, openExternalLinks=True, objectName="muted")
         credit.setTextFormat(Qt.RichText)
         browse = QWidget()
         browse_layout = QVBoxLayout(browse)
-        browse_layout.setContentsMargins(0, 8, 0, 0)
+        browse_layout.setContentsMargins(*[CONTENT_MARGIN] * 4)
         browse_layout.addLayout(chips)
+        browse_layout.addLayout(second)
         browse_layout.addWidget(self.cards, 1)
         browse_layout.addWidget(credit)
         self.apps_stack = QStackedWidget()
@@ -182,7 +188,7 @@ class HomebrewPage(QWidget):
         right.addStretch(1)
         detail_page = QWidget()
         columns = QHBoxLayout(detail_page)
-        columns.setContentsMargins(0, 0, 0, 0)
+        columns.setContentsMargins(0, 0, CONTENT_MARGIN, CONTENT_MARGIN)
         columns.setSpacing(16)
         columns.addWidget(_scroll(self.detail), 5)
         columns.addLayout(right, 4)
@@ -194,6 +200,7 @@ class HomebrewPage(QWidget):
         self.news_box.addWidget(QLabel("Loading the news…", objectName="muted"))
         news_widget = QWidget()
         news_layout = QVBoxLayout(news_widget)
+        news_layout.setContentsMargins(*[CONTENT_MARGIN] * 4)
         news_layout.addLayout(self.news_box)
         news_layout.addStretch(1)
 
@@ -202,7 +209,7 @@ class HomebrewPage(QWidget):
         needs = QLabel(REQUIREMENTS_HTML.format(retroarch=retroarch), wordWrap=True,
                        openExternalLinks=True, alignment=Qt.AlignTop)
         needs.setTextFormat(Qt.RichText)
-        needs.setContentsMargins(8, 8, 8, 8)
+        needs.setContentsMargins(*[CONTENT_MARGIN] * 4)
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self.apps_stack, "Apps")
@@ -592,6 +599,7 @@ class HomebrewPage(QWidget):
         category = SHELVES[max(0, self.shelf.checkedId())][1]
         if category is None:
             self.cards.set_cards([self._app_card(d) for d in self.apps.values()])
+            self.shelf_count.setText(f"{len(self.apps)} apps vcinject recommends")
             return
         words = self.store_search.text().lower().split()
         apps = [a for a in self.store if (not category or category in a.categories)
@@ -601,6 +609,7 @@ class HomebrewPage(QWidget):
         elif self.store_sort.currentIndex() == 2:
             apps.sort(key=lambda a: a.title.lower())
         self.cards.set_cards([self._store_card(a) for a in apps])
+        self.shelf_count.setText(f"{len(apps)} apps" if self.store else "Loading the list of all homebrew…")
     def _installed_ids() -> set[int]:
         ids = set()
         for console in installed.known_consoles():

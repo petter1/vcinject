@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 from .. import art, library, systems
 from ..errors import InjectError
 from .cardview import GREEN, ORANGE, Card, CardView, ViewControls
-from .qtutil import gui_settings, to_qimage
+from .qtutil import CONTENT_MARGIN, gui_settings, to_qimage
 
 KEY_ROLE = Qt.UserRole
 GOOD_DUMP = QColor(46, 157, 79)
@@ -827,8 +827,8 @@ class LibraryPanel(QFrame):
 
         layout = QVBoxLayout(self)
         if grid:  # the gallery: the design of the Homebrew page
-            self.setObjectName("")  # no card around it
-            layout.setContentsMargins(0, 4, 0, 0)
+            self.setObjectName("contentBox")  # the light box of the Homebrew and Titles tabs
+            layout.setContentsMargins(*[CONTENT_MARGIN] * 4)
             self.chips = QHBoxLayout()
             self.chips.setSpacing(6)
             more = QToolButton(text="Library", toolTip="Folder, rescan, covers, names, zip")

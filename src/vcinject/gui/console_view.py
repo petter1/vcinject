@@ -17,7 +17,7 @@ from ..errors import InjectError
 from ..homemenu import MAIN, Folder, GameCard, Icon
 from .cardview import Card, CardView, ViewControls
 from .consoleart import console_picture
-from .qtutil import gui_settings, thumbnail, to_pixmap
+from .qtutil import CONTENT_MARGIN, gui_settings, thumbnail, to_pixmap
 
 SETUP_HTML = """
 <p>vcinject talks to your 3DS through <b>vcinject Link</b>, a small app for the 3DS.</p>
@@ -757,6 +757,7 @@ class ConsoleWindow(QDialog):
         back = QPushButton("◀  My 3DS", objectName="link", clicked=self.show_devices)
         device = QWidget()
         device_layout = QVBoxLayout(device)
+        device_layout.setContentsMargins(20, 16, 20, 12)  # as the other pages
         device_layout.addWidget(back, alignment=Qt.AlignLeft)
         device_layout.addLayout(top)
         device_layout.addWidget(self.setup_hint)
@@ -796,7 +797,10 @@ class ConsoleWindow(QDialog):
         self.title_grid = CardView(self._title_picture, cover_ratio=0.75)
         self.title_grid.card_current.connect(lambda key: self._show_title(self._titles_by_id.get(key)))
         self.title_grid.card_activated.connect(lambda _key: self.start_title())
-        chips.addWidget(ViewControls("console_titles", 180, [self.title_grid]))
+        self.title_count = QLabel(objectName="muted")
+        second = QHBoxLayout()  # as on Games and Homebrew: how many, then the look
+        second.addWidget(self.title_count, 1)
+        second.addWidget(ViewControls("console_titles", 180, [self.title_grid]))
         self._titles_by_id: dict[int, remote.Title] = {}
         self._icons: dict[tuple, QPixmap] = {}
 
@@ -841,7 +845,9 @@ class ConsoleWindow(QDialog):
         content.addWidget(panel)
         tab = QWidget()
         box = QVBoxLayout(tab)
+        box.setContentsMargins(*[CONTENT_MARGIN] * 4)
         box.addLayout(chips)
+        box.addLayout(second)
         box.addLayout(content, 1)
         self._show_title(None)
         return tab
@@ -885,6 +891,7 @@ class ConsoleWindow(QDialog):
                       objectName="muted", wordWrap=True)
         tab = QWidget()
         box = QVBoxLayout(tab)
+        box.setContentsMargins(*[CONTENT_MARGIN] * 4)
         box.addLayout(head)
         box.addWidget(scroll, 1)
         box.addWidget(hint)
@@ -1242,6 +1249,7 @@ class ConsoleWindow(QDialog):
                 continue
             shown.append((info.name.lower(), title, info, title_kind))
         self._titles_by_id = {title.id: title for _n, title, _i, _k in shown}
+        self.title_count.setText(f"{len(shown)} titles")
         self.title_grid.set_cards([self._title_card(title, info, title_kind)
                                    for _name, title, info, title_kind in sorted(shown, key=lambda t: t[0])])
         self._show_title(self._selected_title())
