@@ -488,3 +488,36 @@ def test_missing_games_and_device_summaries(tmp_path, monkeypatch):
     assert "1 update" in page._summary("A") and "Checkpoint" in page._summary("A")
     assert "Everything up to date" in page._summary("B")
     assert "Not checked yet" in page._summary("C")
+
+
+def test_gallery_console_chips_switch_on_and_off(tmp_path, monkeypatch):
+    monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path / "data"))
+    from vcinject.gui import libraryview
+
+    roms = tmp_path / "roms"
+    roms.mkdir()
+    for name in ("Golden Sun.gba", "Bionicle.gba", "Tetris.gb"):
+        (roms / name).write_bytes(b"\0" * 0x200)
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    panel = libraryview.LibraryPanel(grid=True)
+    panel.load(roms)
+    chips = panel._chips
+    assert list(chips) == ["all", "gba", "gb"]
+    assert chips["gba"].text() == "Game Boy Advance  2" and chips["gba"].isChecked()
+
+    def shown():
+        return sorted(e.title for e in panel._all_entries() if e.kind == "rom")
+
+    assert shown() == ["Bionicle", "Golden Sun", "Tetris"]
+    chips["gba"].click()                                   # off
+    assert shown() == ["Tetris"] and not chips["gba"].isChecked() and not chips["all"].isChecked()
+    chips["gb"].click()                                    # the last one stays on
+    assert shown() == ["Tetris"] and chips["gb"].isChecked()
+    chips["all"].click()
+    assert shown() == ["Bionicle", "Golden Sun", "Tetris"] and chips["all"].isChecked()
+    chips["gb"].click()
+    again = libraryview.LibraryPanel(grid=True)            # the choice is kept
+    again.load(roms)
+    assert not again._chips["gb"].isChecked()
+    panel.stop()
+    again.stop()

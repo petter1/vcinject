@@ -606,6 +606,9 @@ class LibraryPanel(QFrame):
         self._placeholders: dict[str, Image.Image] = {}  # console -> box without cover
         language = QLocale.system().name().split("_")[0]
         self._prefer = tuple(t for t in (library.LANGUAGE_REGION.get(language), "Europe") if t)
+        # consoles switched off with their chips (the gallery); all are on at first
+        self._systems_off: set[str] = set(filter(None, str(self.settings.value("library/systems_off", "")).split(",")))
+        self._chips: dict[str, QPushButton] = {}
 
         # --- controls ---
         title = QLabel("Library", objectName="cardTitle")
@@ -756,17 +759,56 @@ class LibraryPanel(QFrame):
         self.summary = QLabel(objectName="muted", wordWrap=True)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.addLayout(top)
-        layout.addLayout(tools)
-        layout.addWidget(self.folder_label)
-        row = QHBoxLayout()
-        row.addWidget(self.search, 1)
-        row.addWidget(options_button)
-        layout.addLayout(row)
-        layout.addWidget(self.summary)
-        layout.addWidget(self.views, 1)
-        layout.addWidget(self.count)
+        if grid:  # the gallery: the design of the Homebrew page
+            self.setObjectName("")  # no card around it
+            layout.setContentsMargins(0, 4, 0, 0)
+            self.chips = QHBoxLayout()
+            self.chips.setSpacing(6)
+            more = QToolButton(text="Library", toolTip="Folder, rescan, covers, names, zip")
+            more.setPopupMode(QToolButton.InstantPopup)
+            menu = QMenu(more)
+            menu.addAction("Choose folder…", self.choose_folder)
+            menu.addSeparator()
+            menu.addAction("Rescan the folder", self.rescan)
+            menu.addAction("Reload all covers and info", self.reload_all)
+            menu.addAction("Rename to release names", self.clean_names)
+            menu.addAction("Zip each game", self.zip_roms)
+            more.setMenu(menu)
+            options_button.setText("Options")
+            self.search.setPlaceholderText("Search games")
+            self.search.setMaximumWidth(220)
+            row = QHBoxLayout()  # the consoles, and the search like on the Homebrew page
+            row.addLayout(self.chips)
+            row.addStretch(1)
+            row.addWidget(self.search)
+            layout.addLayout(row)
+            second = QHBoxLayout()
+            second.addWidget(self.summary, 1)
+            for widget in (self.sort, self.view_choice, options_button, more):
+                second.addWidget(widget)
+            layout.addLayout(second)
+            layout.addWidget(self.views, 1)
+            bottom = QHBoxLayout()
+            bottom.addWidget(self.count, 1)
+            bottom.addWidget(self.folder_label)
+            layout.addLayout(bottom)
+            for widget in (title, choose):
+                widget.setParent(None)
+            for i in range(tools.count()):
+                if tools.itemAt(i).widget():
+                    tools.itemAt(i).widget().setParent(None)
+        else:
+            layout.setContentsMargins(12, 12, 12, 12)
+            layout.addLayout(top)
+            layout.addLayout(tools)
+            layout.addWidget(self.folder_label)
+            row = QHBoxLayout()
+            row.addWidget(self.search, 1)
+            row.addWidget(options_button)
+            layout.addLayout(row)
+            layout.addWidget(self.summary)
+            layout.addWidget(self.views, 1)
+            layout.addWidget(self.count)
         self._analyzed.connect(self._update_row)
         self._catalog_ready.connect(self._show_catalog)
         self._cover_ready.connect(self._set_missing_cover)
@@ -835,7 +877,8 @@ class LibraryPanel(QFrame):
                 library.take_over(old, rom)
         same_folder = self.folder_label.text() == str(folder)
         self.roms = roms
-        self.folder_label.setText(str(folder))
+        self.folder_label.setText(f"Folder: {folder.name}" if self.grid else str(folder))
+        self.folder_label.setToolTip(str(folder))
         self._rows = {rom.path: i for i, rom in enumerate(self.roms)}
         if not same_folder:  # the old folder's collection does not apply
             self._catalog, self._missing = [], []
@@ -991,7 +1034,7 @@ class LibraryPanel(QFrame):
             details.append(note)
         status = []
         if rom.built:
-            details.append(f"✓ built ({rom.built[-1].title_id:016X})")
+            details.append("✓ built")  # the title ID is in the tooltip
             status.append("✓ built")
         if rom.self_dumped:
             status.append("self-dumped")
@@ -999,6 +1042,7 @@ class LibraryPanel(QFrame):
             status.append(note)
         series = self._series.get(rom.title, "")
         tip = [str(rom.path), " · ".join(details)] + ([f"Series: {series}"] if series else []) \
+            + ([f"Title ID {rom.built[-1].title_id:016X}"] if rom.built else []) \
             + ([f"Dump: {dump}"] if dump else [])
         region = rom.release[len(rom.title):].strip() if rom.release else ""
         versions = tuple(library.version_codes(sorted(group, key=lambda r: r is not rom)))
@@ -1031,10 +1075,9 @@ class LibraryPanel(QFrame):
 
     def _build_entries(self) -> list[Entry]:
         text = self.search.text().strip().lower()
-        system = self.system_filter.currentData()
         rows = []
         for index, rom in enumerate(self.roms):
-            if index in self._hidden_versions or system not in (None, rom.system.key) \
+            if index in self._hidden_versions or not self.system_shown(rom.system.key) \
                     or not self._in_series(rom.title):
                 continue
             if text and text not in rom.title.lower() and text not in rom.path.name.lower() \
@@ -1044,9 +1087,10 @@ class LibraryPanel(QFrame):
             rows.append((self._sort_key(entry, True), entry))
         # "Only series I own": missing games only of series with a game in the folder
         owned_series = {self._series.get(rom.title) for i, rom in enumerate(self.roms)
-                        if system in (None, rom.system.key)} - {None}
+                        if self.system_shown(rom.system.key)} - {None}
         for game in self._missing:
-            if (text and text not in game.title.lower()) or not self._in_series(game.title):
+            if (text and text not in game.title.lower()) or not self._in_series(game.title) \
+                    or not self.system_shown(game.system.key):
                 continue
             if self.collected_only.isChecked() and self._series.get(game.title) not in owned_series:
                 continue
@@ -1096,10 +1140,9 @@ class LibraryPanel(QFrame):
 
     def _fill_series_filter(self):
         chosen = self.series_filter.currentData()
-        system = self.system_filter.currentData()
         owned: dict[str, int] = {}
         total: dict[str, int] = {}
-        for title in {rom.title for rom in self.roms if system in (None, rom.system.key)}:
+        for title in {rom.title for rom in self.roms if self.system_shown(rom.system.key)}:
             if title in self._series:
                 owned[self._series[title]] = owned.get(self._series[title], 0) + 1
         for game in self._catalog:
@@ -1107,7 +1150,7 @@ class LibraryPanel(QFrame):
                 total[self._series[game.title]] = total.get(self._series[game.title], 0) + 1
         names = sorted(set(owned) | set(total), key=str.lower)
         compilations = sum(library.is_compilation(rom.title) for rom in self.roms
-                           if system in (None, rom.system.key))
+                           if self.system_shown(rom.system.key))
         self.series_filter.blockSignals(True)
         self.series_filter.clear()
         self.series_filter.addItem("All series", None)
@@ -1119,6 +1162,57 @@ class LibraryPanel(QFrame):
         self.series_filter.setCurrentIndex(max(0, self.series_filter.findData(chosen)))
         self.series_filter.blockSignals(False)
 
+    # --- console chips ---------------------------------------------------------------
+
+    def system_shown(self, key: str) -> bool:
+        """Whether games of this console are shown (chips in the gallery, else the menu)."""
+        if not self.grid:
+            wanted = self.system_filter.currentData()
+            return wanted in (None, key)
+        return key not in self._systems_off
+
+    def _update_chips(self):
+        """One on/off chip per console in the folder, with its number of games."""
+        if not self.grid:
+            return
+        counts: dict[str, int] = {}
+        for rom in self.roms:
+            counts[rom.system.key] = counts.get(rom.system.key, 0) + 1
+        wanted = ["all"] + [k for k in systems.SYSTEMS if k in counts]
+        if list(self._chips) != wanted:
+            for chip in self._chips.values():
+                chip.setParent(None)
+                chip.deleteLater()
+            self._chips = {}
+            for key in wanted:
+                chip = QPushButton(objectName="chip", checkable=True)
+                chip.clicked.connect(lambda _=False, key=key: self._chip_clicked(key))
+                self.chips.addWidget(chip)
+                self._chips[key] = chip
+        for key, chip in self._chips.items():
+            if key == "all":
+                chip.setText("All")
+                chip.setChecked(not self._systems_off)
+                chip.setToolTip("Show the games of every console")
+            else:
+                chip.setText(f"{systems.SYSTEMS[key].name}  {counts[key]}")
+                chip.setChecked(key not in self._systems_off)
+                chip.setToolTip(f"Show or hide the {systems.SYSTEMS[key].name} games")
+
+    def _chip_clicked(self, key: str):
+        present = [k for k in self._chips if k != "all"]
+        if key == "all":
+            self._systems_off = set()
+        elif key in self._systems_off:
+            self._systems_off.discard(key)
+        elif len([k for k in present if k not in self._systems_off]) > 1:
+            self._systems_off.add(key)  # never all off: the last one stays on
+        self.settings.setValue("library/systems_off", ",".join(sorted(self._systems_off)))
+        self._update_chips()
+        self._refresh()
+        self._catalog_timer.start()
+        self._update_summary()
+
     def show_options(self):
         self.options.show()
         self.options.raise_()
@@ -1126,7 +1220,9 @@ class LibraryPanel(QFrame):
 
     def _update_summary(self):
         """The active filters and sorting in one line under the search field."""
-        parts = [self.system_filter.currentText(), self.sort.currentText().replace("Sort: ", "by ")]
+        off = [systems.SYSTEMS[k].name for k in sorted(self._systems_off) if k in systems.SYSTEMS]
+        parts = [("All systems" if not off else "without " + ", ".join(off)),
+                 self.sort.currentText().replace("Sort: ", "by ")]
         if self.series_filter.currentData() is not None:
             parts.insert(1, self.series_filter.currentText())
         if self.stacks.isChecked():
@@ -1141,13 +1237,13 @@ class LibraryPanel(QFrame):
         self.summary.setText(" · ".join(parts))
 
     def _update_count(self):
-        system = self.system_filter.currentData()
+        self._update_chips()
         shown = sum(1 for e in self._all_entries() if e.kind == "rom")
         built = sum(1 for rom in self.roms if rom.built)
         summary = f"{shown} of {len(self.roms)} ROMs · {built} built"
         if self.show_missing.isChecked() and self._catalog:
             games = [g for g in self._catalog if self._in_series(g.title)
-                     and system in (None, g.system.key)]
+                     and self.system_shown(g.system.key)]
             summary += f"\nCollection: {sum(g.owned for g in games)} of {len(games)} games"
         self.count.setText(summary)
 
@@ -1627,8 +1723,7 @@ class LibraryPanel(QFrame):
         if not self.show_missing.isChecked():
             self._refresh()
             return
-        wanted = self.system_filter.currentData()
-        keys = [wanted] if wanted else sorted({rom.system.key for rom in self.roms})
+        keys = sorted(k for k in {rom.system.key for rom in self.roms} if self.system_shown(k))
         tags = self.REGIONS[self.region.currentText()]
         roms = list(self.roms)
         prefer = self._prefer
@@ -1784,8 +1879,12 @@ class LibraryOptions(QDialog):
             layout.addWidget(box)
             return inner
 
-        group("Show", panel.system_filter, panel.series_filter)
-        group("Order", panel.sort, panel.stacks, panel.badges)
+        if panel.grid:  # consoles and sorting are in the gallery's own row
+            group("Show", panel.series_filter)
+            group("Order", panel.stacks, panel.badges)
+        else:
+            group("Show", panel.system_filter, panel.series_filter)
+            group("Order", panel.sort, panel.stacks, panel.badges)
         missing = group("Missing games", panel.show_missing)
         sub = QVBoxLayout()
         sub.setContentsMargins(22, 0, 0, 0)  # options that need "Show missing games"

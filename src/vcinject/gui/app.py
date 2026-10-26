@@ -79,7 +79,7 @@ QToolButton#install { background: palette(highlight); color: palette(highlighted
 QToolButton#install:disabled { background: palette(mid); }
 QPushButton#chip { border: 1px solid palette(mid); border-radius: 13px; padding: 4px 12px;
     background: palette(base); }
-QPushButton#chip:checked { background: palette(text); color: palette(base); font-weight: 600; }
+QPushButton#chip:checked { background: palette(text); color: palette(base); }
 QPushButton#link { border: none; background: transparent; color: palette(highlight);
     font-weight: 600; padding: 4px 0; }
 """
