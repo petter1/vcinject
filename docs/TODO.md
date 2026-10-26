@@ -1,18 +1,10 @@
 # TODO
 
-## Next: rethink the whole GUI
+## Next
 
-vcinject grew window by window (build, library side panel and window, 3DS
-Homebrew, My 3DS with tabs, QR panel, setup wizard). It should feel like one
-piece and not overwhelm new users. Decide the structure first, then build the
-items below into it.
-
-## Next in the new GUI
-
-- My 3DS: one card per console (as in the concept) instead of the console
-  chooser; recommendations beyond updates (alternative or duplicate apps,
-  saves without a backup).
-- Titles: tell official Virtual Console titles apart (they are listed as
+- **Recommendations beyond updates** on My 3DS: alternative or duplicate apps
+  (two FTP servers, an unmaintained fork), saves without a backup.
+- **Titles**: tell official Virtual Console titles apart (they are listed as
   "Games and apps"; only injects vcinject built or with an inject product code
   count as VC); covers from GameTDB for retail games.
 - **Recognise templates on the 3DS** ("first start, dump automatically"):
@@ -22,6 +14,7 @@ items below into it.
     product code of injects (`SNES-`, `GEN-`, `GB-`, `GBC-`, `NES-`, `FDS-`)
   - forwarder templates and Nintendo's GB/GBC emulator need the exheader and
     RomFS, which FS does not hand out (`0xD9004676` for RomFS) → GodMode9
+- **Try on hardware**: starting a title (vcinject Link 13) and restoring a save.
 
 ## Only with GodMode9
 

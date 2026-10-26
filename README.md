@@ -40,7 +40,9 @@ Virtual Console injects for the **Wii** (WAD channels) and the **Wii U**
   the 3DS that runs vcinject Link (or on all of them). A QR code for FBI still
   works for consoles without vcinject Link.
 - **Your collection as a cover gallery:** point vcinject at your ROM folder
-  (sub folders included); every game shows on which 3DS it is installed.
+  (sub folders included); every game shows on which 3DS it is installed, and
+  its page has a short description in your language (from RetroGamesNexus or
+  Wikipedia) – games you don't have yet too.
   Zipped ROMs (one game per .zip) work like unpacked ones; optionally the
   No-Intro database shows what your collection is missing.
 - **My 3DS:** one card per console; per console a status report (system,
@@ -192,7 +194,8 @@ One window, four sections in the side bar:
   (title ID, save type, plate language, LCD ghosting, brightness) are folded
   away under *Customize*. Double-clicking a game in the gallery installs it
   right away; **Build CIA** only writes the file.
-- **My 3DS** – one card per console that runs vcinject Link. Open one for
+- **My 3DS** – one card per console that runs vcinject Link, each saying
+  what could be updated (read in the background; *Refresh* reads again). Open one for
   its **Overview** (status report with *Update* / *Update all*, and the
   activity log, the same as on the 3DS), its **Titles** (tiles with filters
   and search; start a title, back up or restore its save, save icon and

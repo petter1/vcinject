@@ -15,7 +15,7 @@ try:
     from PySide6.QtWidgets import (
         QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame,
         QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
-        QProgressBar, QPushButton, QSlider, QStackedWidget, QToolButton, QVBoxLayout, QWidget,
+        QProgressBar, QPushButton, QScrollArea, QSlider, QStackedWidget, QToolButton, QVBoxLayout, QWidget,
     )
 except ImportError:  # pragma: no cover - reported to the user at startup
     print("The GUI needs PySide6: pip install 'vcinject[gui]'", file=sys.stderr)
@@ -160,7 +160,7 @@ class RomDropZone(QFrame):
         self.release = QLabel(objectName="muted")
         self.release.setWordWrap(True)
         # CRC32 / serial and links to libretro and RetroGamesNexus
-        self.ids = QLabel(objectName="muted")
+        self.ids = QLabel(objectName="muted", wordWrap=True)
         self.ids.setTextInteractionFlags(Qt.TextBrowserInteraction)
         self.ids.setVisible(False)
         # several versions of the game in the library (languages, copies): pick one
@@ -567,6 +567,8 @@ class MissingGamePage(QWidget):
         self.state = QLabel(wordWrap=True)
         self.releases = QLabel(wordWrap=True)
         self.releases.setTextFormat(Qt.RichText)
+        self.about = QLabel(wordWrap=True, openExternalLinks=True)
+        self.about.setTextFormat(Qt.RichText)
         libretro = QPushButton("libretro database ↗", objectName="secondary",
                                clicked=lambda: self._open("libretro"))
         nexus = QPushButton("RetroGamesNexus ↗", objectName="secondary",
@@ -577,7 +579,7 @@ class MissingGamePage(QWidget):
         links.addStretch(1)
         text = QVBoxLayout()
         text.setSpacing(10)
-        for widget in (self.name, self.facts, self.state, self.releases):
+        for widget in (self.name, self.facts, self.about, self.state, self.releases):
             text.addWidget(widget)
         text.addLayout(links)
         text.addStretch(1)
@@ -603,6 +605,11 @@ class MissingGamePage(QWidget):
                            if unreleased else "<b>Not in your collection.</b> Dump it from your "
                            "cartridge (e.g. with a GBxCart) and put it into your ROM folder: "
                            "vcinject then checks it against the known good dump.")
+        self.about.setText("<span style='color:gray'>Looking it up…</span>")
+        if game:
+            self.main.describe(entry.title, game.system, lambda found: self.about.setText(_about_html(found)))
+        else:
+            self.about.setText("")
         if game and game.releases:
             self.releases.setText("<b>Known releases</b> (No-Intro)<br>"
                                   + "<br>".join(game.releases[:12])
@@ -767,6 +774,7 @@ class MainWindow(QMainWindow):
             lambda: self.install_button.setText(self.install_target.action_text()))
         self.install_button.setText(self.install_target.action_text())
         self._wifi_progress.connect(self._show_wifi_progress)
+        self._about_ready.connect(self._about_arrived)
         actions = QHBoxLayout()
         actions.addWidget(self.install_button, 2)
         actions.addWidget(self.build_button, 1)
@@ -784,6 +792,10 @@ class MainWindow(QMainWindow):
         self.on_3ds_rows = QGridLayout()
         self.on_3ds_rows.setColumnStretch(1, 1)
         on_3ds_layout.addLayout(self.on_3ds_rows)
+        self.about_card, about_layout = card("About the game")
+        self.about_text = QLabel(wordWrap=True, openExternalLinks=True)
+        self.about_text.setTextFormat(Qt.RichText)
+        about_layout.addWidget(self.about_text)
         self.customize_button = QToolButton(text="Customize – title, artwork, advanced",
                                             objectName="disclosure", checkable=True)
         self.customize_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
@@ -800,7 +812,7 @@ class MainWindow(QMainWindow):
         ConsoleWatcher.shared().installed_changed.connect(self._fill_on_3ds)
         left = QVBoxLayout()
         left.setSpacing(12)
-        for widget in (self.drop, self.on_3ds_card, self.customize_button, self.customize):
+        for widget in (self.drop, self.on_3ds_card, self.about_card, self.customize_button, self.customize):
             left.addWidget(widget)
         left.addStretch(1)
         right = QVBoxLayout()
@@ -821,9 +833,17 @@ class MainWindow(QMainWindow):
 
         # one game: what used to be the whole window
         back = QPushButton("◀  Games", objectName="link", clicked=self.show_gallery)
+        # the left column scrolls: with Customize open it is taller than the window
+        left_widget = QWidget()
+        left_widget.setLayout(left)
+        left_scroll = QScrollArea(widgetResizable=True, frameShape=QFrame.NoFrame)
+        left_scroll.setWidget(left_widget)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        left_scroll.setMinimumWidth(left_widget.minimumSizeHint().width()
+                                    + left_scroll.verticalScrollBar().sizeHint().width())
         columns = QHBoxLayout()
         columns.setSpacing(16)
-        columns.addLayout(left, 5)
+        columns.addWidget(left_scroll, 5)
         columns.addLayout(right, 6)
         self.game_page = QWidget()
         game_layout = QVBoxLayout(self.game_page)
@@ -1016,6 +1036,11 @@ class MainWindow(QMainWindow):
         self.load_rom(Path(path))
         if self.rom_path == Path(path):
             self.games.setCurrentWidget(self.game_page)
+            index = self.library._rows.get(Path(path))
+            rom = self.library.roms[index] if index is not None else None
+            title = _display_title(rom.release if rom and rom.release else Path(path).stem.split(" (")[0])
+            self.about_text.setText("<span style='color:gray'>Looking it up…</span>")
+            self.describe(title, self.system, lambda found: self.about_text.setText(_about_html(found)))
 
     def open_missing(self, entry):
         """A game that is not in the folder: what is known about it."""
@@ -1680,6 +1705,29 @@ class MainWindow(QMainWindow):
             self._install_paths(consoles, [Path(p) for p in chosen])
 
     _wifi_progress = Signal(str, int, int)
+    _about_ready = Signal(str, object)  # game title, about.About or None
+
+    def describe(self, title: str, system: "systems.System", show):
+        """Looks the game up on Wikipedia in the background; ``show(about)`` gets the
+        result if the same game is still shown then."""
+        import threading
+        from .. import about
+        self._about_wanted = title
+        self._about_show = show
+        language = QLocale.system().name().split("_")[0] or "en"
+
+        def work():
+            try:
+                found = about.describe(title, system.name, language, system.key)
+            except (InjectError, OSError, ValueError):
+                found = None
+            self._about_ready.emit(title, found)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _about_arrived(self, title: str, found):
+        if title == getattr(self, "_about_wanted", None):
+            self._about_show(found)
 
     def _install_paths(self, consoles: list, paths: list[Path]):
         from . import wifi_install
@@ -1715,6 +1763,16 @@ class MainWindow(QMainWindow):
         self.qr_panel.stop()
         self.library.stop()
         super().closeEvent(event)
+
+
+def _about_html(found) -> str:
+    if found is None:
+        return "<span style='color:gray'>No description found.</span>"
+    text = found.text if len(found.text) < 700 else found.text[:700].rsplit(" ", 1)[0] + " …"
+    genres = f"<span style='color:gray'>{', '.join(g.title() for g in found.genres)}</span><br>" \
+        if found.genres else ""
+    link = f"<br><a href='{found.url}'>From {found.source}: {found.title} ↗</a>" if found.url else ""
+    return genres + text + link
 
 
 def _display_title(release: str) -> str:

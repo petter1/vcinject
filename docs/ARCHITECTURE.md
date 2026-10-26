@@ -39,6 +39,7 @@ done the way they are. User documentation is in the [README](../README.md).
 | `homemenu.py`, `disa.py` | the HOME Menu layout; reading save data containers |
 | `saves.py` | backing up and restoring save data of titles |
 | `installed.py` | which game of the library is installed on which 3DS |
+| `about.py` | a game's description: RetroGamesNexus (in the user's language, with genres), else Wikipedia |
 
 ## The GUI (`src/vcinject/gui/`)
 
@@ -47,11 +48,15 @@ done the way they are. User documentation is in the [README](../README.md).
 
 | Section | Module | Notes |
 | --- | --- | --- |
-| Games | `app.py`, `libraryview.py` | the library (`LibraryPanel(grid=True)`) as gallery, a game's page (the former main window: drop zone, *On your 3DS*, *Customize*, preview, Install) |
+| Games | `app.py`, `libraryview.py` | the library (`LibraryPanel(grid=True)`) as gallery; a game's page (the former main window: drop zone, *On your 3DS*, *About the game*, *Customize*, preview, Install); `MissingGamePage` for games not in the folder |
 | My 3DS | `console_view.py` | `DevicesPage` (a card per console) → `ConsoleWindow` pages: Overview (`MirrorPanel`), Titles (tiles, FBI-like actions), HOME Menu (`HomeGrid`) |
 | Homebrew | `homebrew_view.py` | the catalog; install over Wi-Fi or by QR code |
 | Setup | `setup_view.py` | `health.check()` as a checklist |
 
+- **`DevicesPage`** reads each online console's titles and status report in
+  the background (on finding it, every 10 minutes, or *Refresh*) for the
+  summary on its card; the console open in the window is left alone, as
+  vcinject Link serves one connection at a time.
 - **`wifi_install.py`**: `ConsoleWatcher` (shared) asks the network every 10 s
   which consoles run vcinject Link (broadcast only); a console stays online for
   35 s after its last answer, as a busy vcinject Link does not answer
@@ -143,6 +148,7 @@ overrides it):
 | `registry.json` | every title ID built or taken on a console (`source`: vcinject / tickets) |
 | `templates/` | GBA template, VC looks, emulator templates (from the user's own titles) |
 | `homebrew/` | release info (a day), downloaded CIAs, `title.json` per release (title ID and version) |
+| `about/<language>/` | game descriptions, found or not (each game is looked up once) |
 | `3ds/consoles.json` | every console seen: name, last address |
 | `3ds/<device ID>/icons/` | SMDHs per title and version (empty file: the title has none) |
 | `3ds/<device ID>/titles.json` | the console's installed titles, for *installed on* |

@@ -211,6 +211,25 @@ LANGUAGES = {"de", "fr", "es", "it", "nl", "pt", "ru", "ja", "ko", "zh", "zh-TW"
              "th"}
 
 
+def describe(slug: str, language: str = "") -> tuple[str, list[str]] | None:
+    """The game page's short description (in ``language`` when the site has it) and
+    genres."""
+    lang = language if language in LANGUAGES else ""
+    page = _cached(_cache_dir() / "pages" / (lang or "en") / f"{slug}.html", page_url(slug, lang))
+    if not page:
+        return None
+    for block in _LD_RE.findall(page.decode("utf-8", "replace")):
+        try:
+            data = json.loads(block)
+        except ValueError:
+            continue
+        for item in data.get("@graph", [data]):
+            if item.get("@type") == "VideoGame" and item.get("description"):
+                genre = item.get("genre") or []
+                return item["description"], list(genre) if isinstance(genre, list) else [str(genre)]
+    return None
+
+
 def page_url(slug: str, language: str = "") -> str:
     prefix = f"/{language}" if language in LANGUAGES else ""
     return f"{BASE}{prefix}/games/{slug}"
