@@ -244,3 +244,109 @@ def news(per_project: int = 3) -> list[News]:
                               str(release.get("published_at") or "")[:10],
                               release.get("body") or "", release.get("html_url", "")))
     return sorted(found, key=lambda n: n.date, reverse=True)
+
+
+# --- every 3DS app of Universal-Updater's database ---------------------------------------
+
+# the database's licence keys -> SPDX, for the ones that allow passing the app on
+_DB_LICENCES = {"gpl-3.0": "GPL-3.0", "gpl-3.0+": "GPL-3.0", "gpl-2.0": "GPL-2.0", "gpl-2.0+": "GPL-2.0",
+                "mit": "MIT", "agpl-3.0": "AGPL-3.0", "apache-2.0": "Apache-2.0", "lgpl-3.0": "LGPL-3.0",
+                "lgpl-2.1": "LGPL-2.1", "zlib": "Zlib", "bsd-2-clause": "BSD-2-Clause",
+                "bsd-3-clause": "BSD-3-Clause", "unlicense": "Unlicense", "mpl-2.0": "MPL-2.0",
+                "isc": "ISC", "0bsd": "0BSD"}
+OPEN_LICENCES.add("AGPL-3.0")
+
+
+@dataclass(frozen=True)
+class StoreApp:
+    """A 3DS app listed in Universal-DB (https://db.universal-team.net), the database of
+    Universal-Updater by Universal-Team, with a .cia download."""
+    slug: str
+    title: str
+    author: str
+    description: str
+    long_description: str
+    categories: tuple
+    licence: str           # SPDX when known, else the database's key ("other", "")
+    version: str           # the newest release's tag
+    cia_url: str
+    cia_name: str
+    title_ids: tuple       # from the database's unique IDs
+    icon_url: str
+    image_url: str
+    screenshots: tuple
+    stars: int
+    updated: str
+    source: str
+    color: str
+
+    @property
+    def allowed(self) -> bool:
+        return self.licence in OPEN_LICENCES
+
+
+def store_apps() -> list[StoreApp]:
+    """Every 3DS app of Universal-DB with a .cia, the most starred first (the database is
+    looked up at most daily)."""
+    entries = _get_json(STORE_DB, _folder() / "universal-db.json")
+    apps = []
+    for entry in entries:
+        if "3DS" not in (entry.get("systems") or []):
+            continue
+        cia = next(((name, d) for name, d in (entry.get("downloads") or {}).items()
+                    if str(name).lower().endswith(".cia") and isinstance(d, dict) and d.get("url")), None)
+        if cia is None:
+            continue
+        key = str(entry.get("license") or "").lower()
+        shots = tuple((s.get("description", ""), s["url"]) for s in entry.get("screenshots") or []
+                      if isinstance(s, dict) and s.get("url"))
+        ids = tuple((APPLICATION << 32) | (int(u) << 8) for u in entry.get("unique_ids") or []
+                    if str(u).isdigit())
+        apps.append(StoreApp(
+            str(entry.get("slug") or entry.get("title")), str(entry.get("title", "")),
+            str(entry.get("author", "")), str(entry.get("description", "")),
+            str(entry.get("long_description", "")), tuple(entry.get("categories") or ()),
+            _DB_LICENCES.get(key, key), str(entry.get("version", "")), cia[1]["url"], str(cia[0]),
+            ids, str(entry.get("icon", "")), str(entry.get("image", "")), shots,
+            int(entry.get("stars") or 0), str(entry.get("updated", ""))[:10],
+            str(entry.get("source") or entry.get("github") or ""), str(entry.get("color", ""))))
+    return sorted(apps, key=lambda a: (-a.stars, a.title.lower()))
+
+
+APPLICATION = 0x00040000
+
+
+def store_download(app: StoreApp) -> Path:
+    """The app's .cia, downloaded once per version."""
+    from .artwork import _download
+    if not app.allowed:
+        raise InjectError(f"{app.title} has no open licence; get it from {app.source or 'its author'}.")
+    tag = re.sub(r"[^A-Za-z0-9._-]", "_", app.version or "latest")
+    target = _folder() / "store" / re.sub(r"[^A-Za-z0-9._-]", "_", app.slug) / tag / app.cia_name
+    if target.is_file():
+        return target
+    data = _download(app.cia_url)
+    if not data:
+        raise InjectError(f"Downloading {app.title} failed.")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    return target
+
+
+def cia_title_at(url: str) -> tuple[int, int]:
+    """Title ID and version of the .cia at ``url``, from its first 64 KiB (kept)."""
+    import hashlib
+
+    from .artwork import conditional_get
+    from .ncch import cia_title
+    cache = _folder() / "titles" / f"{hashlib.sha1(url.encode()).hexdigest()}.json"
+    if cache.is_file():
+        known = json.loads(cache.read_text())
+        return int(known["title_id"], 16), known["version"]
+    data, _etag = conditional_get(url, headers={"Range": "bytes=0-65535"})
+    if not isinstance(data, bytes):
+        raise InjectError(f"{url} could not be downloaded.")
+    title_id, version = cia_title(data)
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"title_id": f"{title_id:016X}", "version": version}))
+    return title_id, version

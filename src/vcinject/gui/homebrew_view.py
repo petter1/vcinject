@@ -7,10 +7,11 @@ import threading
 from dataclasses import dataclass, field
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QPushButton,
-                               QScrollArea, QStackedWidget, QTabWidget, QToolButton, QVBoxLayout,
-                               QWidget)
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QComboBox, QFrame, QGridLayout,
+                               QHBoxLayout, QLabel, QLineEdit, QListView, QListWidget,
+                               QListWidgetItem, QMenu, QPushButton, QScrollArea, QStackedWidget,
+                               QTabWidget, QToolButton, QVBoxLayout, QWidget)
 
 from .. import forwarder, homebrew, installed, status, systems
 from ..errors import InjectError
@@ -34,6 +35,14 @@ Install <b>DSP1</b> below, start it once from the HOME Menu, done. RetroArch its
 """
 
 COVER = QSize(260, 130)
+TILE = 96
+# the chips of the Apps tab: Recommended (vcinject's catalog), then Universal-DB's categories
+SHELVES = (("Recommended", None), ("All", ""), ("Games", "game"), ("Utilities", "utility"),
+           ("Apps", "app"), ("Emulators", "emulator"), ("Media", "media"), ("Save tools", "save-tool"))
+CREDIT = ("The list of apps, their pictures and descriptions come from "
+          "<a href='https://db.universal-team.net'>Universal-DB</a>, the database of "
+          "<a href='https://github.com/Universal-Team/Universal-Updater'>Universal-Updater</a> "
+          "by Universal-Team. Thank you!")
 
 
 @dataclass
@@ -72,6 +81,9 @@ class HomebrewPage(QWidget):
     _done = Signal(str, str)           # app key, what happened
     _progress = Signal(str, str)       # app key, "Installing… 40 %"
     _downloaded = Signal(str, object, str)  # app key, Path or None, error (QR)
+    _store_loaded = Signal(object)     # [homebrew.StoreApp] or None
+    _tile_icon = Signal(str, object)   # slug, icon bytes
+    _store_version = Signal(str, int)  # slug, newest version (from its .cia)
 
     def __init__(self, main):
         super().__init__()
@@ -106,8 +118,52 @@ class HomebrewPage(QWidget):
         grid_box.addStretch(1)
         self.detail = QWidget()
         self.detail_layout = QVBoxLayout(self.detail)
+        self.store: list[homebrew.StoreApp] = []
+        self.store_versions: dict[str, int] = {}   # slug -> newest version
+        self.store_icons: dict[str, bytes] = {}
+        self._store_loaded.connect(self._show_store)
+        self._tile_icon.connect(self._icon_arrived)
+        self._store_version.connect(self._version_arrived)
+        chips = QHBoxLayout()
+        self.shelf = QButtonGroup(self)
+        for index, (label, _category) in enumerate(SHELVES):
+            chip = QPushButton(label, objectName="chip", checkable=True, checked=index == 0)
+            self.shelf.addButton(chip, index)
+            chips.addWidget(chip)
+        self.shelf.idClicked.connect(lambda _id: self._fill_store())
+        chips.addStretch(1)
+        self.store_search = QLineEdit(placeholderText="Search all homebrew", clearButtonEnabled=True)
+        self.store_search.setMaximumWidth(220)
+        self.store_search.textChanged.connect(self._search_typed)
+        self.store_sort = QComboBox()
+        for label in ("Popular", "Recently updated", "Name"):
+            self.store_sort.addItem(label)
+        self.store_sort.currentIndexChanged.connect(lambda _i: self._fill_store())
+        chips.addWidget(self.store_search)
+        chips.addWidget(self.store_sort)
+        self.tiles = QListWidget()
+        self.tiles.setViewMode(QListView.IconMode)
+        self.tiles.setIconSize(QSize(TILE, TILE))
+        self.tiles.setGridSize(QSize(TILE + 44, TILE + 48))
+        self.tiles.setResizeMode(QListView.Adjust)
+        self.tiles.setMovement(QListView.Static)
+        self.tiles.setWordWrap(True)
+        self.tiles.setUniformItemSizes(True)
+        self.tiles.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.tiles.itemClicked.connect(lambda item: self.show_store_app(item.data(Qt.UserRole)))
+        self.shelves = QStackedWidget()
+        self.shelves.addWidget(_scroll(grid_widget))
+        self.shelves.addWidget(self.tiles)
+        credit = QLabel(CREDIT, wordWrap=True, openExternalLinks=True, objectName="muted")
+        credit.setTextFormat(Qt.RichText)
+        browse = QWidget()
+        browse_layout = QVBoxLayout(browse)
+        browse_layout.setContentsMargins(0, 8, 0, 0)
+        browse_layout.addLayout(chips)
+        browse_layout.addWidget(self.shelves, 1)
+        browse_layout.addWidget(credit)
         self.apps_stack = QStackedWidget()
-        self.apps_stack.addWidget(_scroll(grid_widget))
+        self.apps_stack.addWidget(browse)
         self.apps_stack.addWidget(_scroll(self.detail))
         self.shown: str | None = None  # app on the detail page
         self._news = None
@@ -139,6 +195,7 @@ class HomebrewPage(QWidget):
         for data in self.apps.values():
             threading.Thread(target=self._load, args=(data.app,), daemon=True).start()
         threading.Thread(target=lambda: self._news_loaded.emit(self._fetch_news()), daemon=True).start()
+        threading.Thread(target=self._load_store, daemon=True).start()
 
     # --- data ----------------------------------------------------------------------
 
@@ -195,11 +252,15 @@ class HomebrewPage(QWidget):
                 widget.deleteLater()
         for index, data in enumerate(self.apps.values()):
             self.grid.addWidget(self._card(data), index // 3, index % 3)
-        updates = sum(len(self._needing(d)[0]) for d in self.apps.values())
+        updates = sum(len(self._needing(d)[0]) for d in self.apps.values()) + sum(
+            len(self._store_status(a)[1]) for a in self.store if a.allowed and a.slug in self.store_versions)
         self.update_all.setText(f"Update all ({updates})")
         self.update_all.setVisible(updates > 0)
         if self.shown and self.apps_stack.currentIndex() == 1:
-            self.show_app(self.shown)
+            if self.shown.startswith("store:"):
+                self.show_store_app(self.shown[6:])
+            else:
+                self.show_app(self.shown)
 
     def _status_html(self, data: AppData) -> str:
         if data.error:
@@ -223,12 +284,15 @@ class HomebrewPage(QWidget):
         return " &nbsp;·&nbsp; ".join(chips) or "<span style='color:gray'>No 3DS known yet</span>"
 
     def _action(self, data: AppData) -> QToolButton:
+        outdated, missing = self._needing(data)
+        return self._action_button(data.app.key, bool(data.release and data.release.allowed),
+                                   outdated, missing, lambda: homebrew.download(data.app))
+
+    def _action_button(self, key: str, allowed: bool, outdated: list, missing: list, fetch) -> QToolButton:
         """Install / Update where it is needed; the menu offers every 3DS and the QR code."""
         button = QToolButton(objectName="install")
         button.setToolButtonStyle(Qt.ToolButtonTextOnly)
-        allowed = bool(data.release and data.release.allowed)
-        busy = self.state.get(data.app.key)
-        outdated, missing = self._needing(data)
+        busy = self.state.get(key)
         if busy:
             button.setText(busy)
             button.setEnabled(False)
@@ -247,18 +311,18 @@ class HomebrewPage(QWidget):
         button.setEnabled(allowed)
         menu = QMenu(button)
         for console in self.watcher.consoles:
-            menu.addAction(f"Install on {console.label}", lambda c=console: self.install_over_wifi(data.app.key, [c]))
+            menu.addAction(f"Install on {console.label}", lambda c=console: self.install_over_wifi(key, [c], fetch))
         if len(self.watcher.consoles) > 1:
             menu.addAction(f"Install on all {len(self.watcher.consoles)}",
-                           lambda: self.install_over_wifi(data.app.key, list(self.watcher.consoles)))
+                           lambda: self.install_over_wifi(key, list(self.watcher.consoles), fetch))
         menu.addSeparator()
-        menu.addAction("QR code (FBI)", lambda: self.install(data.app.key))
+        menu.addAction("QR code (FBI)", lambda: self.install(key, fetch))
         button.setMenu(menu)
         button.setPopupMode(QToolButton.MenuButtonPopup)
         if default is None:
-            button.clicked.connect(lambda: self.install(data.app.key))
+            button.clicked.connect(lambda: self.install(key, fetch))
         elif default:
-            button.clicked.connect(lambda: self.install_over_wifi(data.app.key, default))
+            button.clicked.connect(lambda: self.install_over_wifi(key, default, fetch))
         return button
 
     def _card(self, data: AppData) -> QFrame:
@@ -307,16 +371,7 @@ class HomebrewPage(QWidget):
         """The app's own page: big cover, the long description, screenshots, status."""
         data = self.apps[key]
         self.shown = key
-        while self.detail_layout.count():
-            item = self.detail_layout.takeAt(0)
-            if item.widget():
-                item.widget().setParent(None)
-                item.widget().deleteLater()
-            elif item.layout():
-                while item.layout().count():
-                    child = item.layout().takeAt(0).widget()
-                    if child:
-                        child.setParent(None)
+        self._clear_detail()
         back = QPushButton("◀  Homebrew", objectName="link", clicked=lambda: self.apps_stack.setCurrentIndex(0))
         self.detail_layout.addWidget(back, alignment=Qt.AlignLeft)
         cover = QLabel()
@@ -345,18 +400,39 @@ class HomebrewPage(QWidget):
         self.detail_layout.addWidget(state)
         action = self._action(data)
         self.detail_layout.addWidget(action, alignment=Qt.AlignLeft)
-        if data.info.screenshots:
-            self.shots = QHBoxLayout()
-            self.shots.setSpacing(10)
-            self.detail_layout.addWidget(QLabel("<b>Screenshots</b>"))
-            self.detail_layout.addLayout(self.shots)
-            for _text, url in data.info.screenshots[:6]:
-                threading.Thread(target=lambda url=url: self._shot_loaded.emit(key, homebrew.picture(url)),
-                                 daemon=True).start()
+        self._add_screenshots(key, data.info.screenshots)
         self.detail_layout.addStretch(1)
         self.apps_stack.setCurrentIndex(1)
 
+    def _clear_detail(self):
+        while self.detail_layout.count():
+            item = self.detail_layout.takeAt(0)
+            if item.widget():
+                item.widget().setParent(None)
+                item.widget().deleteLater()
+            elif item.layout():
+                while item.layout().count():
+                    child = item.layout().takeAt(0).widget()
+                    if child:
+                        child.setParent(None)
+
+    def _add_screenshots(self, key: str, shots: tuple):
+        if not shots:
+            return
+        self.shots = QHBoxLayout()
+        self.shots.setSpacing(10)
+        self.detail_layout.addWidget(QLabel("<b>Screenshots</b>"))
+        self.detail_layout.addLayout(self.shots)
+        for _text, url in shots[:6]:
+            threading.Thread(target=lambda url=url: self._shot_loaded.emit(key, homebrew.picture(url)),
+                             daemon=True).start()
+
     def _add_shot(self, key: str, image):
+        if key == f"cover:{self.shown}" and hasattr(self, "store_cover"):
+            pix = _pixmap(image, QSize(520, 260), enlarge=False)
+            if pix:
+                self.store_cover.setPixmap(pix)
+            return
         if key != self.shown or not hasattr(self, "shots"):
             return
         pix = _pixmap(image, QSize(240, 180))
@@ -365,11 +441,199 @@ class HomebrewPage(QWidget):
             label.setPixmap(pix)
             self.shots.addWidget(label)
 
-    # --- installing ----------------------------------------------------------------
+    # --- all homebrew (Universal-DB) ---------------------------------------------------
 
-    def install_over_wifi(self, key: str, consoles: list):
-        """Downloads the app and installs it on ``consoles`` over Wi-Fi."""
-        app = homebrew.APPS[key]
+    def _load_store(self):
+        try:
+            apps = homebrew.store_apps()
+        except (InjectError, OSError, ValueError):
+            apps = None
+        self._store_loaded.emit(apps)
+        if not apps:
+            return
+        curated = {a.repo.lower() for a in homebrew.CATALOG}
+        known = {}
+        for console in installed.known_consoles():
+            known.update(installed.versions(console.key))
+        for app in apps:  # newest versions of what is installed somewhere: for updates
+            if app.allowed and set(app.title_ids) & set(known) and app.source.lower().split("github.com/")[-1] not in curated:
+                try:
+                    self._store_version.emit(app.slug, homebrew.cia_title_at(app.cia_url)[1])
+                except (InjectError, OSError, ValueError):
+                    continue
+
+    def _show_store(self, apps):
+        curated = {a.repo.lower() for a in homebrew.CATALOG}
+        self.store = [a for a in apps or [] if a.source.lower().split("github.com/")[-1] not in curated]
+        self._fill_store()
+        threading.Thread(target=self._load_icons, daemon=True).start()
+
+    def _load_icons(self):
+        for app in list(self.store):
+            data = homebrew.picture(app.icon_url) if app.icon_url else None
+            if data:
+                self._tile_icon.emit(app.slug, data)
+
+    def _search_typed(self, text: str):
+        if text and self.shelf.checkedId() == 0:  # searching means all homebrew
+            self.shelf.button(1).setChecked(True)
+        self._fill_store()
+
+    def _fill_store(self):
+        shelf = max(0, self.shelf.checkedId())
+        category = SHELVES[shelf][1]
+        self.shelves.setCurrentIndex(0 if category is None else 1)
+        if category is None:
+            return
+        words = self.store_search.text().lower().split()
+        apps = [a for a in self.store if (not category or category in a.categories)
+                and all(w in f"{a.title} {a.author} {a.description}".lower() for w in words)]
+        if self.store_sort.currentIndex() == 1:
+            apps.sort(key=lambda a: a.updated, reverse=True)
+        elif self.store_sort.currentIndex() == 2:
+            apps.sort(key=lambda a: a.title.lower())
+        self.tiles.clear()
+        on = self._on_ids = self._installed_ids()
+        for app in apps:
+            item = QListWidgetItem(QIcon(self._tile(app, bool(set(app.title_ids) & on))), app.title)
+            item.setData(Qt.UserRole, app.slug)
+            item.setToolTip(f"{app.title} – {app.author}\n{app.description}")
+            self.tiles.addItem(item)
+
+    @staticmethod
+    def _installed_ids() -> set[int]:
+        ids = set()
+        for console in installed.known_consoles():
+            ids |= set(installed.versions(console.key))
+        return ids
+
+    def _tile(self, app: homebrew.StoreApp, on_a_3ds: bool) -> QPixmap:
+        pix = QPixmap(TILE, TILE)
+        pix.fill(Qt.transparent)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(app.color) if app.color.startswith("#") else QColor(90, 80, 140))
+        p.drawRoundedRect(0, 0, TILE, TILE, 14, 14)
+        icon = _pixmap(self.store_icons.get(app.slug), QSize(64, 64))
+        if icon:
+            p.drawPixmap((TILE - icon.width()) // 2, (TILE - icon.height()) // 2, icon)
+        else:
+            p.setPen(QColor("white"))
+            p.setFont(QFont(p.font().family(), 22, QFont.Bold))
+            p.drawText(pix.rect(), Qt.AlignCenter, app.title[:2])
+        if on_a_3ds:  # installed on one of the 3DSs
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor("#1E9E5A"))
+            p.drawEllipse(TILE - 26, 6, 20, 20)
+            p.setPen(QColor("white"))
+            p.setFont(QFont(p.font().family(), 11, QFont.Bold))
+            p.drawText(TILE - 26, 6, 20, 20, Qt.AlignCenter, "✓")
+        p.end()
+        return pix
+
+    def _icon_arrived(self, slug: str, data: bytes):
+        self.store_icons[slug] = data
+        for row in range(self.tiles.count()):
+            item = self.tiles.item(row)
+            if item.data(Qt.UserRole) == slug:
+                app = self._store_app(slug)
+                item.setIcon(QIcon(self._tile(app, bool(set(app.title_ids) & getattr(self, "_on_ids", set())))))
+
+    def _version_arrived(self, slug: str, version: int):
+        self.store_versions[slug] = version
+        self._refresh_apps()
+
+    def _store_app(self, slug: str) -> homebrew.StoreApp:
+        return next(a for a in self.store if a.slug == slug)
+
+    def _store_status(self, app: homebrew.StoreApp) -> tuple[str, list, list]:
+        """Status line, online 3DSs where it is outdated, and where it is missing."""
+        known = {c.key: c.label for c in installed.known_consoles()}
+        known.update({c.key: c.label for c in self.watcher.consoles})
+        newest = self.store_versions.get(app.slug)
+        chips, outdated, missing = [], [], []
+        online = {c.key: c for c in self.watcher.consoles}
+        for key, label in sorted(known.items(), key=lambda kv: kv[1].lower()):
+            versions = installed.versions(key)
+            version = next((versions[i] for i in app.title_ids if i in versions), None)
+            name = label.split(" (")[0]
+            if version is None:
+                chips.append(f"<span style='color:gray'>{name}: not installed</span>")
+                if key in online:
+                    missing.append(online[key])
+            elif newest is not None and 0 <= version < newest:
+                chips.append(f"<span style='color:#1D4E99'>{name}: {status.version_text(version)} → "
+                             f"{status.version_text(newest)}</span>")
+                if key in online:
+                    outdated.append(online[key])
+            else:
+                shown = status.version_text(version) if version >= 0 else "installed"
+                chips.append(f"<span style='color:#1E9E5A'>{name}: ✓ {shown}</span>")
+        line = " &nbsp;·&nbsp; ".join(chips) or "<span style='color:gray'>No 3DS known yet</span>"
+        return line, outdated, missing
+
+    def show_store_app(self, slug: str):
+        """An app of Universal-DB on its own page, like the recommended ones."""
+        app = self._store_app(slug)
+        self.shown = f"store:{slug}"
+        self._clear_detail()
+        back = QPushButton("◀  Homebrew", objectName="link", clicked=lambda: self.apps_stack.setCurrentIndex(0))
+        self.detail_layout.addWidget(back, alignment=Qt.AlignLeft)
+        self.store_cover = QLabel()
+        self.detail_layout.addWidget(self.store_cover)
+        if app.image_url:
+            threading.Thread(target=lambda: self._shot_loaded.emit(f"cover:{self.shown}",
+                                                                    homebrew.picture(app.image_url)),
+                             daemon=True).start()
+        facts = [f"by {app.author}"] if app.author else []
+        facts += [app.version, f"licence {app.licence or 'unknown'}", f"★ {app.stars}", f"updated {app.updated}"]
+        heading = QLabel(f"<span style='font-size:24px; font-weight:700'>{app.title}</span>"
+                         f"<br><span style='color:gray'>{' · '.join(f for f in facts if f)}</span>")
+        self.detail_layout.addWidget(heading)
+        body = QLabel(app.long_description or app.description, wordWrap=True, openExternalLinks=True)
+        body.setTextFormat(Qt.MarkdownText)
+        body.setMaximumWidth(760)
+        self.detail_layout.addWidget(body)
+        if app.source:
+            self.detail_layout.addWidget(QLabel(f"<a href='{app.source}'>{app.source.split('//')[-1]} ↗</a>",
+                                                openExternalLinks=True))
+        line, outdated, missing = self._store_status(app)
+        state = QLabel(line, wordWrap=True)
+        state.setTextFormat(Qt.RichText)
+        self.detail_layout.addWidget(state)
+        if app.allowed:
+            self.detail_layout.addWidget(self._store_action(app, outdated, missing), alignment=Qt.AlignLeft)
+        else:  # vcinject passes on only what an open licence allows
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
+            page = QPushButton("Get it from its author ↗", objectName="primary")
+            page.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(app.source)))
+            page.setEnabled(bool(app.source))
+            self.detail_layout.addWidget(page, alignment=Qt.AlignLeft)
+            self.detail_layout.addWidget(QLabel("No licence that allows passing it on is known, so vcinject "
+                                                "doesn't download it itself.", objectName="muted"))
+        self._add_screenshots(f"store:{slug}", app.screenshots)
+        self.detail_layout.addStretch(1)
+        self.apps_stack.setCurrentIndex(1)
+        if app.allowed and slug not in self.store_versions and set(app.title_ids) & self._installed_ids():
+            threading.Thread(target=self._read_store_version, args=(app,), daemon=True).start()
+
+    def _read_store_version(self, app: homebrew.StoreApp):
+        try:
+            self._store_version.emit(app.slug, homebrew.cia_title_at(app.cia_url)[1])
+        except (InjectError, OSError, ValueError):
+            pass
+
+    def _store_action(self, app: homebrew.StoreApp, outdated: list, missing: list) -> QToolButton:
+        key = f"store:{app.slug}"
+        fetch = lambda: homebrew.store_download(app)  # noqa: E731
+        return self._action_button(key, app.allowed, outdated, missing, fetch)
+
+
+    def install_over_wifi(self, key: str, consoles: list, fetch=None):
+        """Downloads the app (``fetch()`` → .cia) and installs it on ``consoles`` over Wi-Fi."""
+        fetch = fetch or (lambda: homebrew.download(homebrew.APPS[key]))
         self.state[key] = "Downloading…"
         self._refresh_apps()
 
@@ -381,7 +645,7 @@ class HomebrewPage(QWidget):
 
         def work():
             try:
-                path = homebrew.download(app)
+                path = fetch()
                 self._done.emit(key, " · ".join(wifi_install.install(consoles, [path], progress)))
             except (InjectError, OSError) as exc:
                 self._done.emit(key, f"Failed: {exc}")
@@ -394,7 +658,8 @@ class HomebrewPage(QWidget):
 
     def _install_done(self, key: str, message: str):
         self.state.pop(key, None)
-        self.main.statusBar().showMessage(f"{homebrew.APPS[key].name}: {message}", 15000)
+        name = homebrew.APPS[key].name if key in homebrew.APPS else key.split(":", 1)[-1]
+        self.main.statusBar().showMessage(f"{name}: {message}", 15000)
         self._refresh_apps()
 
     def update_everything(self):
@@ -402,15 +667,20 @@ class HomebrewPage(QWidget):
             outdated, _missing = self._needing(data)
             if outdated:
                 self.install_over_wifi(data.app.key, outdated)
+        for app in self.store:
+            _line, outdated, _missing = self._store_status(app)
+            if outdated and app.allowed:
+                self.install_over_wifi(f"store:{app.slug}", outdated, lambda app=app: homebrew.store_download(app))
 
-    def install(self, key: str):
+    def install(self, key: str, fetch=None):
         """By QR code: download, then the QR code appears on the game page."""
+        fetch = fetch or (lambda: homebrew.download(homebrew.APPS[key]))
         self.state[key] = "Downloading…"
         self._refresh_apps()
 
         def work():
             try:
-                self._downloaded.emit(key, homebrew.download(homebrew.APPS[key]), "")
+                self._downloaded.emit(key, fetch(), "")
             except (InjectError, OSError) as exc:
                 self._downloaded.emit(key, None, str(exc))
 

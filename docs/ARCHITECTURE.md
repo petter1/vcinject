@@ -35,7 +35,7 @@ done the way they are. User documentation is in the [README](../README.md).
 | `serve.py` | the HTTP server behind the QR code for FBI |
 | `remote.py` | the client of vcinject Link: discovery, connection, every command |
 | `status.py` | the status report of a console and the updates it offers |
-| `homebrew.py` | the homebrew catalog: releases, licences, downloads; pictures and descriptions from Universal-Updater's database; news from the GitHub releases |
+| `homebrew.py` | the recommended apps (releases, licences, downloads via the GitHub API); every 3DS app of Universal-DB (`store_apps`: download URL, licence, title IDs from its unique IDs – no GitHub API calls, so no rate limit); pictures; news from the GitHub releases |
 | `homemenu.py`, `disa.py` | the HOME Menu layout; reading save data containers |
 | `saves.py` | backing up and restoring save data of titles |
 | `installed.py` | which game of the library is installed on which 3DS |
@@ -50,7 +50,7 @@ done the way they are. User documentation is in the [README](../README.md).
 | --- | --- | --- |
 | Games | `app.py`, `libraryview.py` | the library (`LibraryPanel(grid=True)`) as gallery; a game's page (the former main window: drop zone, *On your 3DS*, *About the game*, *Customize*, preview, Install); `MissingGamePage` for games not in the folder |
 | My 3DS | `console_view.py` | `DevicesPage` (a card per console) → `ConsoleWindow` pages: Overview (`MirrorPanel`), Titles (tiles, FBI-like actions), HOME Menu (`HomeGrid`) |
-| Homebrew | `homebrew_view.py` | `HomebrewPage`: Apps (cards with cover, description and status per 3DS; an app's page with screenshots), News (releases of the apps, Luma3DS and vcinject), Needed for injects |
+| Homebrew | `homebrew_view.py` | `HomebrewPage`: Apps – *Recommended* as cards, the rest of Universal-DB as tiles by category (an app's page with cover, description, screenshots, status per 3DS; versions of installed apps read from the first 64 KiB of their .cia), News, Needed for injects |
 | Setup | `setup_view.py` | `health.check()` as a checklist |
 
 - **`DevicesPage`** reads each online console's titles and status report in

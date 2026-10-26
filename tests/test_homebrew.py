@@ -80,3 +80,33 @@ def test_store_info_and_news(tmp_path, monkeypatch):
     items = homebrew.news()
     assert [(n.project, n.tag, n.date) for n in items] == [("Checkpoint", "v5.3.0", "2026-10-13"),
                                                            ("Luma3DS", "v13.4", "2026-09-01")]
+
+
+def test_every_3ds_app_of_universal_db(tmp_path, monkeypatch):
+    import json
+
+    from vcinject import artwork, homebrew
+
+    monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path))
+    db = [{"slug": "red-viper", "title": "red-viper", "systems": ["3DS"], "license": "mit", "stars": 300,
+           "unique_ids": [1007616], "version": "v1.0", "categories": ["emulator"],
+           "downloads": {"red-viper.3dsx": {"url": "https://x/rv.3dsx"}, "red-viper.cia": {"url": "https://x/rv.cia"}},
+           "source": "https://github.com/skyfloogle/red-viper", "color": "#ff0000"},
+          {"slug": "closed", "title": "Closed", "systems": ["3DS"], "license": None, "stars": 900,
+           "downloads": {"closed.cia": {"url": "https://x/c.cia"}}},
+          {"slug": "ds-only", "title": "DS only", "systems": ["DS"], "license": "mit",
+           "downloads": {"x.nds": {"url": "https://x/x.nds"}}},
+          {"slug": "no-cia", "title": "No CIA", "systems": ["3DS"], "license": "mit",
+           "downloads": {"x.3dsx": {"url": "https://x/x.3dsx"}}}]
+    monkeypatch.setattr(artwork, "_download", lambda url: json.dumps(db).encode()
+                        if url == homebrew.STORE_DB else (b"CIA" if url == "https://x/rv.cia" else None))
+    apps = homebrew.store_apps()
+    assert [a.slug for a in apps] == ["closed", "red-viper"]            # 3DS with a .cia, most stars first
+    viper = apps[1]
+    assert (viper.licence, viper.allowed, viper.cia_name) == ("MIT", True, "red-viper.cia")
+    assert viper.title_ids == (0x000400000F600000,)
+    assert not apps[0].allowed
+    assert homebrew.store_download(viper).read_bytes() == b"CIA"
+    import pytest
+    with pytest.raises(Exception, match="no open licence"):
+        homebrew.store_download(apps[0])

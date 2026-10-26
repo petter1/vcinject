@@ -202,11 +202,16 @@ One window, four sections in the side bar:
   banner, delete) and its **HOME Menu**. After updates that need a restart,
   vcinject offers it, reconnects by itself and says whether everything
   worked.
-- **Homebrew** – apps for the 3DS like a small store: cover, description and
-  screenshots (from Universal-Updater's database), the version on each of your
-  3DSs, and one button that installs or updates where needed – over Wi-Fi or by
-  QR code; straight from the authors' releases, open-source licences only.
-  **News** lists the latest releases of these apps, Luma3DS and vcinject.
+- **Homebrew** – apps for the 3DS like a small store. *Recommended* holds the
+  apps vcinject itself suggests; *All*, *Games*, *Utilities*, *Emulators* … list
+  every 3DS app of [Universal-DB](https://db.universal-team.net), the database
+  of Universal-Team's Universal-Updater (over 200 with a .cia), searchable and
+  sorted by popularity, with a check mark on what is installed on one of your
+  3DSs. Each app has cover, description and screenshots, the version on each
+  3DS and one button that installs or updates where needed – over Wi-Fi or by
+  QR code, straight from the authors' releases. Apps without a known open
+  licence link to their author instead. **News** lists the latest releases of
+  the recommended apps, Luma3DS and vcinject.
 - **Setup** – everything vcinject needs as one checklist, each part with its
   state and a button to set it up.
 
@@ -430,7 +435,8 @@ In the installed app, the command line is the app binary with arguments, e.g.
 - [Project_CTR](https://github.com/3DSGuy/Project_CTR), [3ds-bannertool](https://github.com/carstene1ns/3ds-bannertool)
 - [devkitPro](https://devkitpro.org) – devkitARM, libctru and citro2d for vcinject Link
 - [Luma3DS](https://github.com/LumaTeam/Luma3DS) – the process information vcinject Link reads
-- [Universal-DB](https://db.universal-team.net) by Universal-Team – homebrew pictures and descriptions
+- [Universal-DB](https://db.universal-team.net) by [Universal-Team](https://github.com/Universal-Team) –
+  the list of 3DS homebrew, its pictures and descriptions (the database of Universal-Updater)
 - [3DSort](https://github.com/SalustLab/3DSort), [Checkpoint](https://github.com/BernardoGiordano/Checkpoint),
   [Cthulhu](https://github.com/Ryuzaki-MrL/Cthulhu), [GodMode9](https://github.com/d0k3/GodMode9) –
   references for the HOME Menu save files, save data access and scripting (no code taken)
