@@ -592,3 +592,27 @@ def test_thumbnails_are_made_once(tmp_path, monkeypatch):
     assert thumbnail("https://x/a.png", 300, load).width() == 300
     assert loads == [1]                                           # the second came from the disk
     assert thumbnail("https://x/none.png", 300, lambda: None).isNull()
+
+
+def test_console_colour_is_chosen_per_3ds(tmp_path, monkeypatch):
+    monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path))
+    from vcinject import consolephotos, remote
+    from vcinject.gui import console_view
+    from vcinject.gui.wifi_install import ConsoleWatcher
+
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert consolephotos.colour("3DS", None).name == "Aqua Blue"          # the first, with a photo
+    assert consolephotos.colour("3DS", "red").photo == ""                 # drawn in its colour
+    assert consolephotos.colour("Unknown", "x") is consolephotos.COLOURS["New 3DS XL"][0]
+    petter = remote.Console("192.168.1.150", info={"name": "Petter1", "id": "022BBA8F", "model": "1"})
+    ConsoleWatcher.shared()._update([petter])
+    page = console_view.DevicesPage()
+    button = next(b for b in page.findChildren(QtWidgets.QToolButton) if b.objectName() == "colourChoice")
+    assert button.text().startswith("Black")                               # 3DS XL: black first
+    red = next(a for a in button.menu().actions() if a.text().startswith("Red"))
+    red.trigger()
+    button = next(b for b in page.findChildren(QtWidgets.QToolButton) if b.objectName() == "colourChoice")
+    assert button.text().startswith("Red / Black")                         # remembered per console
+    assert console_view.DevicesPage()._picture(petter.key, "3DS XL") is not None
+    ConsoleWatcher.shared()._update([])
+    ConsoleWatcher.shared()._seen.clear()

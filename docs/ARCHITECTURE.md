@@ -51,8 +51,11 @@ whose delegate paints `Card`s – fast with thousands) shows cards whose width
 follows a stepless zoom and fills the width, or rows with or without a
 picture; `ViewControls` switches and remembers it per collection. Pictures are
 asked for only when a card is painted. `qtutil.thumbnail()` keeps shrunk
-pictures on disk for good (`<data>/thumbnails`). `consoleart.py` draws the 3DS
-models.
+pictures on disk for good (`<data>/thumbnails`). The pictures of the consoles:
+the 3DS tells its model, not its colour, so the colour is chosen per console
+(setting `console_colour/<id>`); `consolephotos.py` lists each model's colours
+and the free photos of some (Wikimedia Commons, public domain/CC0, downloaded
+once and trimmed); `consoleart.py` draws every other colour.
 
 | Section | Module | Notes |
 | --- | --- | --- |

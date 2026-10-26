@@ -6,18 +6,18 @@ from pathlib import Path
 
 from PIL import Image
 from PySide6.QtCore import QLocale, QPoint, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
+from PySide6.QtGui import QColor, QFont, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (QButtonGroup, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout,
                                QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox,
                                QProgressBar, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
-                               QTabWidget, QVBoxLayout, QWidget)
+                               QTabWidget, QToolButton, QVBoxLayout, QWidget)
 
-from .. import homemenu, installed, registry, remote, saves, smdh, status
+from .. import consolephotos, homemenu, installed, registry, remote, saves, smdh, status
 from ..errors import InjectError
 from ..homemenu import MAIN, Folder, GameCard, Icon
 from .cardview import Card, CardView, ViewControls
 from .consoleart import console_picture
-from .qtutil import gui_settings, to_pixmap
+from .qtutil import gui_settings, thumbnail, to_pixmap
 
 SETUP_HTML = """
 <p>vcinject talks to your 3DS through <b>vcinject Link</b>, a small app for the 3DS.</p>
@@ -418,6 +418,36 @@ class MirrorPanel(QFrame):
 
 # --- the 3DSs, one card each ----------------------------------------------------------
 
+def _colour_dot(colour: str) -> QIcon:
+    pix = QPixmap(24, 24)
+    pix.setDevicePixelRatio(2)
+    pix.fill(Qt.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setBrush(QColor(colour))
+    painter.setPen(QColor(0, 0, 0, 60))
+    painter.drawEllipse(1, 1, 10, 10)
+    painter.end()
+    return QIcon(pix)
+
+
+def _trimmed(data: bytes | None) -> bytes | None:
+    """A photo without its transparent border (so it fills the card's picture)."""
+    import io
+
+    from PIL import Image
+    if not data:
+        return None
+    try:
+        image = Image.open(io.BytesIO(data)).convert("RGBA")
+    except OSError:
+        return None
+    box = image.getchannel("A").getbbox()
+    out = io.BytesIO()
+    (image.crop(box) if box else image).save(out, "PNG")
+    return out.getvalue()
+
+
 class DevicesPage(QWidget):
     """Every 3DS vcinject knows: online ones from the watcher, others as last seen. The
     status report of each online 3DS is read in the background (at most every
@@ -425,6 +455,8 @@ class DevicesPage(QWidget):
     chosen = Signal(object)    # remote.Console
     add = Signal()
     _checked = Signal(str, object, str)  # console key, findings or None, error
+    _photo_loaded = Signal(str, object)  # Commons file, QImage (null: none)
+    PICTURE = QSize(180, 150)
 
     CHECK_EVERY = 600
 
@@ -436,6 +468,8 @@ class DevicesPage(QWidget):
         self.reports: dict[str, tuple[float, list | None, str]] = {}
         self._checking: set[str] = set()
         self._checked.connect(self._report_arrived)
+        self._photos: dict[str, QPixmap] = {}   # Commons file -> photo at the card's size
+        self._photo_loaded.connect(self._photo_arrived)
         title = QLabel("My 3DS", objectName="pageTitle")
         self.hint = QLabel(objectName="muted")
         refresh = QPushButton("Refresh", objectName="secondary", clicked=lambda: self.check_all(force=True))
@@ -525,7 +559,7 @@ class DevicesPage(QWidget):
                           "No 3DS found yet – start vcinject Link on it, in the same Wi-Fi")
         known = {c.key: c.label for c in installed.known_consoles()}
         offline = [(key, label) for key, label in known.items() if key not in {c.key for c in online}]
-        cards = [self._card(c) for c in online] + [self._offline_card(label) for _key, label in offline]
+        cards = [self._card(c) for c in online] + [self._offline_card(key, label) for key, label in offline]
         cards.append(self._add_card())
         for index, card in enumerate(cards):
             self.cards.addWidget(card, index // 3, index % 3)
@@ -542,9 +576,7 @@ class DevicesPage(QWidget):
         outer = QHBoxLayout(frame)
         outer.setContentsMargins(16, 16, 18, 16)
         outer.setSpacing(16)
-        picture = QLabel(alignment=Qt.AlignTop)
-        picture.setPixmap(console_picture(console.model, 150))
-        outer.addWidget(picture)
+        outer.addLayout(self._picture_column(console.key, console.model))
         box = QVBoxLayout()
         outer.addLayout(box, 1)
         name = QLabel(f"<span style='font-size:17px; font-weight:700'>{console.name}</span><br>"
@@ -572,20 +604,85 @@ class DevicesPage(QWidget):
         box.addStretch(1)
         return frame
 
-    def _offline_card(self, label: str) -> QFrame:
+    # --- the pictures of the consoles ----------------------------------------------------
+
+    def _picture(self, key: str, model: str) -> QPixmap:
+        """The free photo of the console's colour once it is here, else the drawing in it."""
+        colour = consolephotos.colour(model, gui_settings().value(f"console_colour/{key}"))
+        if colour.photo:
+            if self._photos.get(colour.photo) is not None:
+                return self._photos[colour.photo]
+            if colour.photo not in self._photos:
+                self._load_photo(colour.photo)
+        return console_picture(model, self.PICTURE.height(), colour.body, colour.accent or None)
+
+    def _load_photo(self, file: str):
+        import threading
+        self._photos[file] = None  # asked for once
+
+        def work():
+            try:
+                image = thumbnail(f"console:{file}", 640, lambda: _trimmed(consolephotos.download(file)))
+            except (InjectError, OSError, ValueError):  # offline: the drawing stays
+                image = QImage()
+            try:
+                self._photo_loaded.emit(file, image)
+            except RuntimeError:  # the page is gone
+                pass
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _photo_arrived(self, file: str, image):
+        if image.isNull():  # stays None: not tried again until vcinject starts again
+            return
+        ratio = 2  # sharp on HiDPI screens
+        pix = QPixmap.fromImage(image).scaled(self.PICTURE * ratio, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        pix.setDevicePixelRatio(ratio)
+        self._photos[file] = pix
+        self.refresh()
+
+    def _picture_column(self, key: str, model: str, faded: bool = False) -> QVBoxLayout:
+        """The picture, and under it the colour (the 3DS can't tell it)."""
+        column = QVBoxLayout()
+        picture = QLabel(alignment=Qt.AlignCenter)
+        picture.setFixedSize(self.PICTURE)
+        pix = self._picture(key, model)
+        if faded:  # greyed: not reachable right now
+            pix = QPixmap(pix)
+            painter = QPainter(pix)
+            painter.setCompositionMode(QPainter.CompositionMode_DestinationIn)
+            painter.fillRect(pix.rect(), QColor(0, 0, 0, 110))
+            painter.end()
+        picture.setPixmap(pix)
+        column.addWidget(picture)
+        chosen = consolephotos.colour(model, gui_settings().value(f"console_colour/{key}"))
+        button = QToolButton(text=f"{chosen.name}  ▾", autoRaise=True, objectName="colourChoice",
+                             toolTip="The colour of this 3DS (it can't tell it itself)")
+        button.setIcon(_colour_dot(chosen.body))
+        button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        button.setStyleSheet("QToolButton#colourChoice { color: palette(placeholder-text); }")
+        button.setPopupMode(QToolButton.InstantPopup)
+        button.setStyleSheet(button.styleSheet() + " QToolButton#colourChoice::menu-indicator { image: none; }")
+        menu = QMenu(button)
+        for colour in consolephotos.colours(model):
+            action = menu.addAction(_colour_dot(colour.body), colour.name + ("  · photo" if colour.photo else ""))
+            action.triggered.connect(lambda _=False, c=colour.key: self._choose_colour(key, c))
+        button.setMenu(menu)
+        column.addWidget(button, alignment=Qt.AlignHCenter)
+        column.addStretch(1)
+        return column
+
+    def _choose_colour(self, key: str, colour: str):
+        gui_settings().setValue(f"console_colour/{key}", colour)
+        self.refresh()
+
+    def _offline_card(self, key: str, label: str) -> QFrame:
         frame = QFrame(objectName="card")
         outer = QHBoxLayout(frame)
         outer.setContentsMargins(16, 16, 18, 16)
         outer.setSpacing(16)
         model = label.split(" (")[-1].rstrip(")") if " (" in label else ""
-        picture = QLabel(alignment=Qt.AlignTop)
-        faded = QPixmap(console_picture(model, 150))
-        painter = QPainter(faded)  # greyed: not reachable right now
-        painter.setCompositionMode(QPainter.CompositionMode_DestinationIn)
-        painter.fillRect(faded.rect(), QColor(0, 0, 0, 110))
-        painter.end()
-        picture.setPixmap(faded)
-        outer.addWidget(picture)
+        outer.addLayout(self._picture_column(key, model, faded=True))
         box = QVBoxLayout()
         outer.addLayout(box, 1)
         box.addWidget(QLabel(f"<span style='font-size:17px; font-weight:700'>{label.split(' (')[0]}</span>"

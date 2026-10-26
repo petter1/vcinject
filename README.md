@@ -199,8 +199,9 @@ covers.
   (title ID, save type, plate language, LCD ghosting, brightness) are folded
   away under *Customize*. Double-clicking a game in the gallery installs it
   right away; **Build CIA** only writes the file.
-- **My 3DS** – one card per console that runs vcinject Link, with a picture of
-  its model, saying what could be updated (read in the background; *Refresh*
+- **My 3DS** – one card per console that runs vcinject Link, with a photo of
+  its model in its colour (the 3DS can't tell its colour, so you pick it once
+  under the picture; colours without a free photo are drawn), saying what could be updated (read in the background; *Refresh*
   reads again). Click a card to open
   its **Overview** (status report with *Update* / *Update all*, and the
   activity log, the same as on the 3DS), its **Titles** (cards with filters
@@ -443,6 +444,11 @@ In the installed app, the command line is the app binary with arguments, e.g.
 - [Luma3DS](https://github.com/LumaTeam/Luma3DS) – the process information vcinject Link reads
 - [Universal-DB](https://db.universal-team.net) by [Universal-Team](https://github.com/Universal-Team) –
   the list of 3DS homebrew, its pictures and descriptions (the database of Universal-Updater)
+- Photos of the consoles from [Wikimedia Commons](https://commons.wikimedia.org), downloaded
+  on first use, all public domain or CC0: Nintendo 3DS XL and Nintendo 2DS by Evan-Amos,
+  [Nintendo 3DS Aqua](https://commons.wikimedia.org/wiki/File:Nintendo3DSAqua.png),
+  [New Nintendo 3DS](https://commons.wikimedia.org/wiki/File:New_Nintendo_3DS.png),
+  New Nintendo 2DS XL by LBDCOM12 and Lemonix1004
 - [3DSort](https://github.com/SalustLab/3DSort), [Checkpoint](https://github.com/BernardoGiordano/Checkpoint),
   [Cthulhu](https://github.com/Ryuzaki-MrL/Cthulhu), [GodMode9](https://github.com/d0k3/GodMode9) –
   references for the HOME Menu save files, save data access and scripting (no code taken)
