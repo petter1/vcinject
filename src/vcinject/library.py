@@ -915,19 +915,9 @@ def nexus_url(title: str, system: systems.System, language: str = "",
 
 
 def nexus_page_exists(title: str, system: systems.System, release: str | None = None) -> bool:
-    """Quick answer for menus, without going online: True when the page is known
-    or the site lists a game of a similar name (checked on opening); False when
-    it surely has none."""
-    from . import nexus
-    key = (system.key, title, release)
-    if key in _NEXUS_PAGES:
-        return _NEXUS_PAGES[key] is not None
-    if system.key not in nexus.PLATFORMS:
-        return False
-    slugs = nexus.known_slugs()
-    if slugs is None:
-        return True  # the site's game list is not loaded yet: offer it
-    return any(nexus.candidates(t, slugs) for t in _nexus_titles(title, system, release))
+    """For menus, without going online: True only when the game's page was found
+    (by ``nexus_url``, e.g. when the game was opened); a similar name is not enough."""
+    return bool(_NEXUS_PAGES.get((system.key, title, release)))
 
 
 # --- downloading all covers at once -------------------------------------------------

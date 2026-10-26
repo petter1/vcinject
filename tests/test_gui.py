@@ -472,6 +472,14 @@ def test_missing_games_and_device_summaries(tmp_path, monkeypatch):
     assert window.missing_page.name.text() == "Golden Sun"
     assert "Not in your collection" in window.missing_page.state.text()
     assert "Golden Sun (Europe)" in window.missing_page.releases.text()
+    page = window.missing_page
+    assert not page.nexus.isVisibleTo(page)              # not before the site is known to have it
+    page._show_nexus("missing:gba:other", "https://retrogamesnexus.com/games/x")
+    assert not page.nexus.isVisibleTo(page)              # an answer for another game
+    page._show_nexus("missing:gba:gs", None)
+    assert not page.nexus.isVisibleTo(page)              # the site has no page
+    page._show_nexus("missing:gba:gs", "https://retrogamesnexus.com/games/golden-sun")
+    assert page.nexus.isVisibleTo(page)
 
     page = DevicesPage()
     page.reports["A"] = (0, [status.Finding(status.UPDATE, "Checkpoint", "3.7.4 -> 5.3.0"),

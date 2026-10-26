@@ -553,6 +553,7 @@ class QrPanel(QFrame):
 
 class MissingGamePage(QWidget):
     """The page of a game that is not in the ROM folder: cover, releases, where to look."""
+    _nexus_found = Signal(str, object)  # game key, page URL or None
 
     def __init__(self, main: "MainWindow"):
         super().__init__()
@@ -571,8 +572,10 @@ class MissingGamePage(QWidget):
         self.about.setTextFormat(Qt.RichText)
         libretro = QPushButton("libretro database ↗", objectName="secondary",
                                clicked=lambda: self._open("libretro"))
-        nexus = QPushButton("RetroGamesNexus ↗", objectName="secondary",
-                            clicked=lambda: self._open("nexus"))
+        self.nexus = nexus = QPushButton("RetroGamesNexus ↗", objectName="secondary",
+                                         clicked=lambda: self._open("nexus"), visible=False)
+        self._nexus_found.connect(self._show_nexus)
+        self._nexus_url = None
         links = QHBoxLayout()
         links.addWidget(libretro)
         links.addWidget(nexus)
@@ -605,6 +608,10 @@ class MissingGamePage(QWidget):
                            if unreleased else "<b>Not in your collection.</b> Dump it from your "
                            "cartridge (e.g. with a GBxCart) and put it into your ROM folder: "
                            "vcinject then checks it against the known good dump.")
+        self.nexus.setVisible(False)  # only once the site is known to have the game
+        self._nexus_url = None
+        if game:
+            self._look_up_nexus(entry.key, game)
         self.about.setText("<span style='color:gray'>Looking it up…</span>")
         if game:
             self.main.describe(entry.title, game.system, lambda found: self.about.setText(_about_html(found)))
@@ -617,8 +624,26 @@ class MissingGamePage(QWidget):
         else:
             self.releases.setText("")
 
+    def _look_up_nexus(self, key: str, game):
+        import threading
+        language = QLocale.system().name().split("_")[0]
+
+        def work():
+            first = game.releases[0] if game.releases else None
+            self._nexus_found.emit(key, library.nexus_url(game.title, game.system, language, first))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_nexus(self, key: str, url):
+        if self.entry is not None and self.entry.key == key and url:
+            self._nexus_url = url
+            self.nexus.setVisible(True)
+
     def _open(self, site: str):
         if self.entry is None or self.entry.game is None:
+            return
+        if site == "nexus" and self._nexus_url:
+            QDesktopServices.openUrl(QUrl(self._nexus_url))
             return
         game = self.entry.game
         open_game_page(self, site, game.system, game.releases[0] if game.releases else None, game.title)

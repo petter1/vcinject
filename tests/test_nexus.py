@@ -75,13 +75,15 @@ def test_menu_offers_the_site_only_when_it_has_the_game(monkeypatch, tmp_path):
 
     _site(monkeypatch, tmp_path)
     gba = systems.SYSTEMS["gba"]
+    monkeypatch.setattr(library, "_NEXUS_PAGES", {})
     nexus.slugs()  # the game list is loaded (as after the first lookup)
-    assert library.nexus_page_exists("Pokemon Clover", gba)
-    assert not library.nexus_page_exists("Bionicle Heroes", gba)  # no similar title at all
+    # a similar name is not enough: only a page that was found is offered
+    assert not library.nexus_page_exists("Pokemon Clover", gba)
     assert library.nexus_url("Pokemon Clover", gba, "de") == f"{nexus.BASE}/de/games/pokemon-clover"
+    assert library.nexus_page_exists("Pokemon Clover", gba)
     assert library.nexus_url("Pokemon Clover", systems.SYSTEMS["snes"]) is None
-    # remembered: a game the site does not have on that console is no longer offered
     assert not library.nexus_page_exists("Pokemon Clover", systems.SYSTEMS["snes"])
+    assert not library.nexus_page_exists("Bionicle Heroes", gba)
 
 
 def test_hack_found_with_words_of_its_base_game(monkeypatch, tmp_path):
