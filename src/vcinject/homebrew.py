@@ -34,6 +34,7 @@ class App:
     asset: str      # the release file to install (a .cia)
     purpose: str
     needed_for: str = ""  # what of vcinject needs it, if anything
+    store_repo: str = ""  # its entry in Universal-Updater's database, when not under ``repo``
 
 
 CATALOG = [
@@ -44,7 +45,8 @@ CATALOG = [
                    "have no sound or don't start"),
     App("fbi", "FBI Reloaded", "TheRealZora/FBI-Reloaded", "FBI-Reloaded_light.cia",
         "Installs CIAs – also over the QR codes vcinject shows. An up-to-date FBI.",
-        needed_for="installing everything via QR code"),
+        needed_for="installing everything via QR code",
+        store_repo="nh-server/FBI-NH"),  # its predecessor: the same app
     App("universal-updater", "Universal-Updater", "Universal-Team/Universal-Updater",
         "Universal-Updater.cia",
         "An app store on the 3DS: installs and updates hundreds of homebrew apps directly."),
@@ -164,3 +166,81 @@ def download(app: App) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(data)
     return target
+
+
+# --- what the Homebrew page shows: pictures, descriptions, news ------------------------
+
+STORE_DB = "https://db.universal-team.net/data/full.json"  # Universal-Updater's database
+
+
+@dataclass(frozen=True)
+class StoreInfo:
+    """What Universal-Updater's database knows about an app."""
+    description: str = ""
+    long_description: str = ""
+    author: str = ""
+    icon_url: str = ""
+    image_url: str = ""          # a 2D banner, used as the app's cover
+    screenshots: tuple = ()      # (description, url)
+
+
+def store_info(app: App) -> StoreInfo:
+    """The app's entry in Universal-Updater's database (matched by its GitHub repo)."""
+    entries = _get_json(STORE_DB, _folder() / "universal-db.json")
+    repo = (app.store_repo or app.repo).lower()
+    entry = next((e for e in entries if str(e.get("github", "")).lower() == repo), None)
+    if entry is None:
+        return StoreInfo(app.purpose)
+    shots = tuple((s.get("description", ""), s["url"]) for s in entry.get("screenshots") or []
+                  if isinstance(s, dict) and s.get("url"))
+    description = str(entry.get("description", "")).replace(" (Archive)", "") or app.purpose
+    return StoreInfo(description, entry.get("long_description", ""),
+                     entry.get("author", ""), entry.get("icon", ""), entry.get("image", ""), shots)
+
+
+def picture(url: str) -> bytes | None:
+    """An image of the database or a release, downloaded once."""
+    import hashlib
+    from .artwork import _download
+    if not url:
+        return None
+    cache = _folder() / "images" / hashlib.sha1(url.encode()).hexdigest()
+    if cache.is_file():
+        return cache.read_bytes() or None
+    data = _download(url)
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_bytes(data or b"")
+    return data or None
+
+
+@dataclass(frozen=True)
+class News:
+    project: str       # "Checkpoint", "Luma3DS", "vcinject"
+    key: str           # catalog app key, "luma" or "vcinject"
+    tag: str
+    date: str          # ISO date
+    notes: str         # release notes (Markdown)
+    url: str
+
+
+NEWS_SOURCES = [(app.name, app.key, app.repo) for app in CATALOG] + [
+    ("Luma3DS", "luma", LUMA_REPO), ("vcinject", "vcinject", "petter1/vcinject")]
+
+
+def news(per_project: int = 3) -> list[News]:
+    """The newest releases of the catalog's apps, Luma3DS and vcinject, newest first
+    (looked up at most daily)."""
+    found: list[News] = []
+    for name, key, repo in NEWS_SOURCES:
+        try:
+            releases = _get_json(API.format(repo=repo) + f"/releases?per_page={per_project}",
+                                 _folder() / f"{key}.news.json")
+        except (InjectError, ValueError):
+            continue
+        for release in releases[:per_project]:
+            if release.get("draft"):
+                continue
+            found.append(News(name, key, release.get("tag_name", ""),
+                              str(release.get("published_at") or "")[:10],
+                              release.get("body") or "", release.get("html_url", "")))
+    return sorted(found, key=lambda n: n.date, reverse=True)

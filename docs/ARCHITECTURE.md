@@ -35,7 +35,7 @@ done the way they are. User documentation is in the [README](../README.md).
 | `serve.py` | the HTTP server behind the QR code for FBI |
 | `remote.py` | the client of vcinject Link: discovery, connection, every command |
 | `status.py` | the status report of a console and the updates it offers |
-| `homebrew.py` | the homebrew catalog: releases, licences, downloads |
+| `homebrew.py` | the homebrew catalog: releases, licences, downloads; pictures and descriptions from Universal-Updater's database; news from the GitHub releases |
 | `homemenu.py`, `disa.py` | the HOME Menu layout; reading save data containers |
 | `saves.py` | backing up and restoring save data of titles |
 | `installed.py` | which game of the library is installed on which 3DS |
@@ -50,7 +50,7 @@ done the way they are. User documentation is in the [README](../README.md).
 | --- | --- | --- |
 | Games | `app.py`, `libraryview.py` | the library (`LibraryPanel(grid=True)`) as gallery; a game's page (the former main window: drop zone, *On your 3DS*, *About the game*, *Customize*, preview, Install); `MissingGamePage` for games not in the folder |
 | My 3DS | `console_view.py` | `DevicesPage` (a card per console) → `ConsoleWindow` pages: Overview (`MirrorPanel`), Titles (tiles, FBI-like actions), HOME Menu (`HomeGrid`) |
-| Homebrew | `homebrew_view.py` | the catalog; install over Wi-Fi or by QR code |
+| Homebrew | `homebrew_view.py` | `HomebrewPage`: Apps (cards with cover, description and status per 3DS; an app's page with screenshots), News (releases of the apps, Luma3DS and vcinject), Needed for injects |
 | Setup | `setup_view.py` | `health.check()` as a checklist |
 
 - **`DevicesPage`** reads each online console's titles and status report in
@@ -147,11 +147,11 @@ overrides it):
 | --- | --- |
 | `registry.json` | every title ID built or taken on a console (`source`: vcinject / tickets) |
 | `templates/` | GBA template, VC looks, emulator templates (from the user's own titles) |
-| `homebrew/` | release info (a day), downloaded CIAs, `title.json` per release (title ID and version) |
+| `homebrew/` | release info (a day), downloaded CIAs, `title.json` per release (title ID and version), `universal-db.json` (Universal-Updater's database, a day), `images/`, `*.news.json` |
 | `about/<language>/` | game descriptions, found or not (each game is looked up once) |
 | `3ds/consoles.json` | every console seen: name, last address |
 | `3ds/<device ID>/icons/` | SMDHs per title and version (empty file: the title has none) |
-| `3ds/<device ID>/titles.json` | the console's installed titles, for *installed on* |
+| `3ds/<device ID>/titles.json` | the console's installed titles and their versions, for *installed on* and the homebrew status |
 | `3ds/<device ID>/homemenu-backups/` | `SaveData.dat` + `Launcher.dat` before each HOME Menu write |
 | `3ds/<device ID>/saves/<title ID>/` | save backups, one zip each |
 | `3ds/<device ID>/boot.firm <time>` | the Luma3DS `boot.firm` replaced by an update |

@@ -40,3 +40,43 @@ def test_no_licence_no_download(monkeypatch):
     assert not homebrew.release(homebrew.APPS["dsp1"]).allowed
     with pytest.raises(InjectError):
         homebrew.download(homebrew.APPS["dsp1"])
+
+
+def test_store_info_and_news(tmp_path, monkeypatch):
+    import json
+
+    from vcinject import artwork, homebrew
+
+    monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path))
+    db = [{"github": "BernardoGiordano/Checkpoint", "description": "Save manager.", "author": "Bernardo",
+           "icon": "https://x/icon.png", "image": "https://x/banner.png",
+           "screenshots": [{"description": "Main", "url": "https://x/shot.png"}]},
+          {"github": "nh-server/FBI-NH", "description": "Open source title manager for the 3DS. (Archive)"}]
+    releases = {"checkpoint": [{"tag_name": "v5.3.0", "published_at": "2026-10-13T10:00:00Z",
+                                "body": "**New**", "html_url": "https://github.com/x"}],
+                "luma": [{"tag_name": "v13.4", "published_at": "2026-09-01T00:00:00Z", "body": "",
+                          "html_url": "u", "draft": False},
+                         {"tag_name": "v13.5-draft", "published_at": "2026-10-20", "draft": True}]}
+
+    def download(url):
+        if url == homebrew.STORE_DB:
+            return json.dumps(db).encode()
+        for key, repo in (("checkpoint", "BernardoGiordano/Checkpoint"), ("luma", homebrew.LUMA_REPO)):
+            if url.startswith(homebrew.API.format(repo=repo) + "/releases?"):
+                return json.dumps(releases[key]).encode()
+        if url == "https://x/banner.png":
+            return b"PNG!"
+        return None
+
+    monkeypatch.setattr(artwork, "_download", download)
+    checkpoint = homebrew.store_info(homebrew.APPS["checkpoint"])
+    assert (checkpoint.description, checkpoint.author, checkpoint.screenshots) == \
+        ("Save manager.", "Bernardo", (("Main", "https://x/shot.png"),))
+    assert homebrew.store_info(homebrew.APPS["fbi"]).description == "Open source title manager for the 3DS."
+    assert homebrew.store_info(homebrew.APPS["pksm"]).description == homebrew.APPS["pksm"].purpose
+    assert homebrew.picture("https://x/banner.png") == b"PNG!"
+    assert homebrew.picture("https://x/missing.png") is None
+
+    items = homebrew.news()
+    assert [(n.project, n.tag, n.date) for n in items] == [("Checkpoint", "v5.3.0", "2026-10-13"),
+                                                           ("Luma3DS", "v13.4", "2026-09-01")]

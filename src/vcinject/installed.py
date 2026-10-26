@@ -31,7 +31,8 @@ def remember(console: remote.Console, titles: list[remote.Title]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"label": console.label, "short": _SHORT.get(console.model, console.model),
                                 "at": time.time(),
-                                "ids": sorted(f"{t.id:016X}" for t in titles if t.is_app)}))
+                                "ids": sorted(f"{t.id:016X}" for t in titles if t.is_app),
+                                "versions": {f"{t.id:016X}": t.version for t in titles if t.is_app}}))
     _cache.pop("stamp", None)
 
 
@@ -54,6 +55,19 @@ def _known() -> dict[Console, set[int]]:
                 continue
         _cache.update(stamp=stamp, known=known)
     return _cache["known"]
+
+
+def versions(key: str) -> dict[int, int]:
+    """Title ID -> installed version of the games and apps on a console (as last read;
+    -1 when only the ID is known)."""
+    path = data_dir() / "3ds" / key / "titles.json"
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    found = {int(i, 16): -1 for i in data.get("ids", [])}  # installed, version not read yet
+    found.update({int(i, 16): v for i, v in data.get("versions", {}).items()})
+    return found
 
 
 def known_consoles() -> list[Console]:

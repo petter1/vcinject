@@ -11,7 +11,7 @@ def test_side_bar_switches_sections(tmp_path, monkeypatch):
     monkeypatch.setenv("VCINJECT_DATA_DIR", str(tmp_path))
     from vcinject import remote
     from vcinject.gui import app as gui
-    from vcinject.gui.homebrew_view import HomebrewDialog
+    from vcinject.gui.homebrew_view import HomebrewPage
     from vcinject.gui.setup_view import SetupPage
 
     monkeypatch.setattr(remote, "discover", lambda *a, **k: [])
@@ -24,7 +24,7 @@ def test_side_bar_switches_sections(tmp_path, monkeypatch):
     assert isinstance(window.pages.currentWidget(), SetupPage)
     assert window.nav["setup"].isChecked() and not window.nav["games"].isChecked()
     window.nav["homebrew"].click()
-    assert isinstance(window.pages.currentWidget(), HomebrewDialog)
+    assert isinstance(window.pages.currentWidget(), HomebrewPage)
     window.nav["console"].click()
     assert window.pages.currentWidget() is window.console_window
     window.open_library_window()                                        # old entry point

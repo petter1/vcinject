@@ -74,6 +74,9 @@ QPushButton#nav { text-align: left; border: none; border-radius: 8px; padding: 9
     font-size: 14px; background: transparent; }
 QPushButton#nav:hover { background: rgba(107, 79, 216, 22); }
 QPushButton#nav:checked { background: rgba(107, 79, 216, 45); font-weight: 600; }
+QToolButton#install { background: palette(highlight); color: palette(highlighted-text);
+    border: none; border-radius: 8px; padding: 7px 14px; font-weight: 600; }
+QToolButton#install:disabled { background: palette(mid); }
 QPushButton#chip { border: 1px solid palette(mid); border-radius: 13px; padding: 4px 12px;
     background: palette(base); }
 QPushButton#chip:checked { background: palette(text); color: palette(base); font-weight: 600; }
@@ -1040,9 +1043,8 @@ class MainWindow(QMainWindow):
             return self.console_window
         if key == "homebrew":
             if self.homebrew_page is None:
-                from .homebrew_view import HomebrewDialog
-                self.homebrew_page = HomebrewDialog(self)
-                self.homebrew_page.setWindowFlags(Qt.Widget)
+                from .homebrew_view import HomebrewPage
+                self.homebrew_page = HomebrewPage(self)
                 self.pages.addWidget(self.homebrew_page)
             return self.homebrew_page
         if self.setup_page is None:
