@@ -6,16 +6,17 @@ from pathlib import Path
 
 from PIL import Image
 from PySide6.QtCore import QLocale, QPoint, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
-from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QComboBox, QDialog, QFileDialog, QFrame,
-                               QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListView,
-                               QListWidget, QListWidgetItem, QMenu, QMessageBox, QProgressBar,
-                               QPushButton, QScrollArea, QSpinBox, QStackedWidget, QTabWidget,
-                               QVBoxLayout, QWidget)
+from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
+from PySide6.QtWidgets import (QButtonGroup, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout,
+                               QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox,
+                               QProgressBar, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
+                               QTabWidget, QVBoxLayout, QWidget)
 
 from .. import homemenu, installed, registry, remote, saves, smdh, status
 from ..errors import InjectError
 from ..homemenu import MAIN, Folder, GameCard, Icon
+from .cardview import Card, CardView, ViewControls
+from .consoleart import console_picture
 from .qtutil import gui_settings, to_pixmap
 
 SETUP_HTML = """
@@ -29,7 +30,6 @@ SETUP_HTML = """
 _MEDIA = {remote.MEDIA_SD: "SD card", remote.MEDIA_NAND: "System", remote.MEDIA_GAME_CARD: "Game Card"}
 
 
-TILE = 132
 TITLE_KINDS = ("All", "Virtual Console", "Game Card", "Games and apps", "System")
 KIND_BADGES = {"Virtual Console": "VC", "Game Card": "CARD", "System": "SYSTEM"}
 _VC_CODES = ("AGB-", "GBA-", "DMG-", "GB-", "CGB-", "GBC-", "NES-", "SNES-", "SNS-", "GEN-", "MD-", "FDS-")
@@ -531,10 +531,22 @@ class DevicesPage(QWidget):
             self.cards.addWidget(card, index // 3, index % 3)
 
     def _card(self, console: remote.Console) -> QFrame:
+        """A 3DS online: its picture and what is on it; the whole card opens it."""
         info = console.info
-        frame = QFrame(objectName="card")
-        box = QVBoxLayout(frame)
-        box.setContentsMargins(18, 16, 18, 16)
+        frame = QFrame(objectName="deviceCard")
+        frame.setCursor(Qt.PointingHandCursor)
+        frame.setToolTip(f"Open {console.name}: titles, saves, HOME Menu")
+        frame.mouseReleaseEvent = lambda event: (event.button() == Qt.LeftButton
+                                                 and frame.rect().contains(event.position().toPoint())
+                                                 and self.chosen.emit(console))
+        outer = QHBoxLayout(frame)
+        outer.setContentsMargins(16, 16, 18, 16)
+        outer.setSpacing(16)
+        picture = QLabel(alignment=Qt.AlignTop)
+        picture.setPixmap(console_picture(console.model, 150))
+        outer.addWidget(picture)
+        box = QVBoxLayout()
+        outer.addLayout(box, 1)
         name = QLabel(f"<span style='font-size:17px; font-weight:700'>{console.name}</span><br>"
                       f"<span style='color:gray'>{console.model} · {console.host}</span>")
         state = QLabel("<span style='color:#1E9E5A'>●</span> Online")
@@ -557,16 +569,27 @@ class DevicesPage(QWidget):
         summary = QLabel(self._summary(console.key), wordWrap=True)
         summary.setTextFormat(Qt.RichText)
         box.addWidget(summary)
-        open_ = QPushButton("Open", objectName="primary")
-        open_.clicked.connect(lambda: self.chosen.emit(console))
-        box.addWidget(open_)
+        box.addStretch(1)
         return frame
 
     def _offline_card(self, label: str) -> QFrame:
         frame = QFrame(objectName="card")
-        box = QVBoxLayout(frame)
-        box.setContentsMargins(18, 16, 18, 16)
-        box.addWidget(QLabel(f"<span style='font-size:17px; font-weight:700'>{label}</span>"))
+        outer = QHBoxLayout(frame)
+        outer.setContentsMargins(16, 16, 18, 16)
+        outer.setSpacing(16)
+        model = label.split(" (")[-1].rstrip(")") if " (" in label else ""
+        picture = QLabel(alignment=Qt.AlignTop)
+        faded = QPixmap(console_picture(model, 150))
+        painter = QPainter(faded)  # greyed: not reachable right now
+        painter.setCompositionMode(QPainter.CompositionMode_DestinationIn)
+        painter.fillRect(faded.rect(), QColor(0, 0, 0, 110))
+        painter.end()
+        picture.setPixmap(faded)
+        outer.addWidget(picture)
+        box = QVBoxLayout()
+        outer.addLayout(box, 1)
+        box.addWidget(QLabel(f"<span style='font-size:17px; font-weight:700'>{label.split(' (')[0]}</span>"
+                             f"<br><span style='color:gray'>{model}</span>"))
         box.addWidget(QLabel("<span style='color:gray'>●</span> Not online – start vcinject Link on it",
                              wordWrap=True))
         box.addStretch(1)
@@ -672,18 +695,13 @@ class ConsoleWindow(QDialog):
         self.title_search.textChanged.connect(self._fill_titles)
         chips.addWidget(self.title_search)
 
-        self.title_grid = QListWidget()
-        self.title_grid.setViewMode(QListView.IconMode)
-        self.title_grid.setIconSize(QSize(TILE, TILE))
-        self.title_grid.setGridSize(QSize(TILE + 34, TILE + 52))
-        self.title_grid.setResizeMode(QListView.Adjust)
-        self.title_grid.setMovement(QListView.Static)
-        self.title_grid.setWordWrap(True)
-        self.title_grid.setUniformItemSizes(True)
-        self.title_grid.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
-        self.title_grid.currentItemChanged.connect(lambda item, _old: self._show_title(
-            item.data(Qt.UserRole) if item else None))
-        self._tiles: dict[tuple, QPixmap] = {}
+        # the same cards (or rows) as the games and the homebrew; the chosen one's page on the right
+        self.title_grid = CardView(self._title_picture, cover_ratio=0.75)
+        self.title_grid.card_current.connect(lambda key: self._show_title(self._titles_by_id.get(key)))
+        self.title_grid.card_activated.connect(lambda _key: self.start_title())
+        chips.addWidget(ViewControls("console_titles", 180, [self.title_grid]))
+        self._titles_by_id: dict[int, remote.Title] = {}
+        self._icons: dict[tuple, QPixmap] = {}
 
         panel = QFrame(objectName="card")
         panel.setFixedWidth(300)
@@ -1114,8 +1132,6 @@ class ConsoleWindow(QDialog):
     def _fill_titles(self):
         kind = TITLE_KINDS[max(0, self.title_filter.checkedId())]
         words = self.title_search.text().lower().split()
-        current = self.title_grid.currentItem()
-        current = current.data(Qt.UserRole).id if current else None
         built = {e.title_id for e in registry.load().values() if not e.imported}
         shown = []
         for title in self.titles:
@@ -1128,52 +1144,30 @@ class ConsoleWindow(QDialog):
             if words and not all(w in f"{info.name} {info.long_name} {info.publisher}".lower() for w in words):
                 continue
             shown.append((info.name.lower(), title, info, title_kind))
-        self.title_grid.blockSignals(True)
-        self.title_grid.clear()
-        for _name, title, info, title_kind in sorted(shown, key=lambda t: t[0]):
-            item = QListWidgetItem(QIcon(self._tile(title, info, title_kind)), info.name)
-            item.setData(Qt.UserRole, title)
-            item.setToolTip(f"{info.long_name or info.name}\n{info.publisher}")
-            self.title_grid.addItem(item)
-            if title.id == current:
-                self.title_grid.setCurrentItem(item)
-        self.title_grid.blockSignals(False)
-        self._show_title(self.title_grid.currentItem().data(Qt.UserRole)
-                         if self.title_grid.currentItem() else None)
+        self._titles_by_id = {title.id: title for _n, title, _i, _k in shown}
+        self.title_grid.set_cards([self._title_card(title, info, title_kind)
+                                   for _name, title, info, title_kind in sorted(shown, key=lambda t: t[0])])
+        self._show_title(self._selected_title())
 
-    def _tile(self, title: remote.Title, info: TitleInfo, kind: str) -> QPixmap:
-        """The title's icon, big and crisp, on a card tinted like it, with its kind."""
-        key = (title.id, title.version, info.icon is not None, kind)
-        if key in self._tiles:
-            return self._tiles[key]
-        pix = QPixmap(TILE, TILE)
-        pix.fill(Qt.transparent)
-        p = QPainter(pix)
-        p.setRenderHint(QPainter.Antialiasing)
+    def _title_card(self, title: remote.Title, info: TitleInfo, kind: str) -> Card:
         tint = info.icon.resize((1, 1)).getpixel((0, 0)) if info.icon is not None else (120, 110, 160)
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor(*[int(c * 0.55) for c in tint]))
-        p.drawRoundedRect(0, 0, TILE, TILE, 14, 14)
-        if info.icon is not None:
-            icon = to_pixmap(info.icon, 96, 96, smooth=False)  # 2x: pixel art stays sharp
-            p.drawPixmap((TILE - 96) // 2, (TILE - 96) // 2 + 6, icon)
-        badge = KIND_BADGES.get(kind, "")
-        if badge:
-            font = QFont(p.font().family(), 8)
-            font.setBold(True)
-            p.setFont(font)
-            width = p.fontMetrics().horizontalAdvance(badge) + 12
-            p.setBrush(QColor(0, 0, 0, 120))
-            p.drawRoundedRect(6, 6, width, 16, 6, 6)
-            p.setPen(Qt.white)
-            p.drawText(QRect(6, 6, width, 16), Qt.AlignCenter, badge)
-        p.end()
-        self._tiles[key] = pix
-        return pix
+        facts = [f for f in (info.publisher, f"{title.size / 2**20:.0f} MiB") if f]
+        return Card(title.id, info.name, " · ".join(facts), status=_MEDIA.get(title.media, ""),
+                    badge=KIND_BADGES.get(kind, ""), tint=QColor(*[int(c * 0.55) for c in tint[:3]]),
+                    tooltip=f"{info.long_name or info.name}\n{info.publisher}", sharp=True, data=info)
+
+    def _title_picture(self, card: Card, _size) -> QPixmap | None:
+        """The 48×48 icon itself: the cards scale it in whole steps, so it stays crisp."""
+        info: TitleInfo = card.data
+        if info.icon is None:
+            return None
+        key = (card.key, id(info.icon))
+        if key not in self._icons:
+            self._icons[key] = to_pixmap(info.icon, 48, 48, smooth=False)
+        return self._icons[key]
 
     def _selected_title(self) -> remote.Title | None:
-        item = self.title_grid.currentItem()
-        return item.data(Qt.UserRole) if item else None
+        return self._titles_by_id.get(self.title_grid.current_key())
 
     def _show_title(self, title: remote.Title | None):
         has = title is not None

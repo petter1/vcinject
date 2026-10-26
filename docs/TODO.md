@@ -2,13 +2,6 @@
 
 ## Next
 
-- **Homebrew page opens slowly**: nothing may block the GUI while it is built.
-- **One card design everywhere**: the cards of *Recommended* for all games,
-  all homebrew and the titles on My 3DS; stepless zoom, responsive columns.
-  Alternative view: rows (details), with or without cover.
-- **My 3DS**: a picture of each console's model; the whole tile opens the
-  console (no *Open* button), only controls with a view of their own stay.
-- **Games**: the view options open beside the gallery, not over it.
 - **Recommendations beyond updates** on My 3DS: alternative or duplicate apps
   (two FTP servers, an unmaintained fork), saves without a backup.
 - **Titles**: tell official Virtual Console titles apart (they are listed as

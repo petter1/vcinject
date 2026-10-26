@@ -184,10 +184,14 @@ upload it.
 
 ## Using the GUI
 
-One window, four sections in the side bar:
+One window, four sections in the side bar. Games, Homebrew and the titles on
+a 3DS share one look: cards whose size the slider (or Ctrl + mouse wheel)
+changes without steps, as many columns as fit – or rows, with or without
+covers.
 
-- **Games** – your collection as a cover gallery; chips switch each console
-  on and off. Click a game for its page, laid out like the Homebrew pages:
+- **Games** – your collection as cards; chips switch each console on and off,
+  each card says on which 3DS the game is, and the view options open beside the
+  covers. Table and Cover Flow are there too. Click a game for its page, laid out like the Homebrew pages:
   cover and name, one line saying on which 3DS it is installed, the preview of
   the HOME Menu icon and the rotating banner, and the big button that installs
   it where **Install to** (top right) says – its menu offers each 3DS, all of
@@ -195,10 +199,11 @@ One window, four sections in the side bar:
   (title ID, save type, plate language, LCD ghosting, brightness) are folded
   away under *Customize*. Double-clicking a game in the gallery installs it
   right away; **Build CIA** only writes the file.
-- **My 3DS** – one card per console that runs vcinject Link, each saying
-  what could be updated (read in the background; *Refresh* reads again). Open one for
+- **My 3DS** – one card per console that runs vcinject Link, with a picture of
+  its model, saying what could be updated (read in the background; *Refresh*
+  reads again). Click a card to open
   its **Overview** (status report with *Update* / *Update all*, and the
-  activity log, the same as on the 3DS), its **Titles** (tiles with filters
+  activity log, the same as on the 3DS), its **Titles** (cards with filters
   and search; start a title, back up or restore its save, save icon and
   banner, delete) and its **HOME Menu**. After updates that need a restart,
   vcinject offers it, reconnects by itself and says whether everything
@@ -207,8 +212,8 @@ One window, four sections in the side bar:
   apps vcinject itself suggests; *All*, *Games*, *Utilities*, *Emulators* … list
   every 3DS app of [Universal-DB](https://db.universal-team.net), the database
   of Universal-Team's Universal-Updater (over 200 with a .cia), searchable and
-  sorted by popularity, with a check mark on what is installed on one of your
-  3DSs. Each app has cover, description and screenshots, the version on each
+  sorted by popularity, saying on which 3DS each is installed. Pictures load only
+  for the cards on screen and are kept as thumbnails for good. Each app has cover, description and screenshots, the version on each
   3DS and one button that installs or updates where needed – over Wi-Fi or by
   QR code, straight from the authors' releases. Apps without a known open
   licence link to their author instead. **News** lists the latest releases of

@@ -330,8 +330,10 @@ def test_my_3ds_shows_a_card_per_3ds(tmp_path, monkeypatch):
     opened = []
     monkeypatch.setattr(console, "connect_to", opened.append)
     ConsoleWatcher.shared()._update([petter])
-    open_button = next(b for b in console.devices.findChildren(QtWidgets.QPushButton) if b.text() == "Open")
-    open_button.click()
+    assert not [b for b in console.devices.findChildren(QtWidgets.QPushButton) if b.text() == "Open"]
+    card = console.devices.findChild(QtWidgets.QFrame, "deviceCard")   # the whole card opens it
+    from PySide6.QtTest import QTest
+    QTest.mouseClick(card, QtCore.Qt.LeftButton)
     assert opened == [petter] and console.pages.currentIndex() == 1
     ConsoleWatcher.shared()._update([])                     # leave the shared watcher as found
     ConsoleWatcher.shared()._seen.clear()

@@ -46,11 +46,19 @@ done the way they are. User documentation is in the [README](../README.md).
 `app.py` holds the main window: a side bar (`nav` buttons) and a
 `QStackedWidget` of sections, created when first opened.
 
+`cardview.py` is the one look of every collection: `CardView` (a `QListView`
+whose delegate paints `Card`s – fast with thousands) shows cards whose width
+follows a stepless zoom and fills the width, or rows with or without a
+picture; `ViewControls` switches and remembers it per collection. Pictures are
+asked for only when a card is painted. `qtutil.thumbnail()` keeps shrunk
+pictures on disk for good (`<data>/thumbnails`). `consoleart.py` draws the 3DS
+models.
+
 | Section | Module | Notes |
 | --- | --- | --- |
-| Games | `app.py`, `libraryview.py` | the library (`LibraryPanel(grid=True)`) as gallery; a game's page (the former main window, laid out like `HomebrewPage`'s detail pages: hero with cover and name, status line per 3DS, install button with menu, *About the game*, *Customize*; `ThreeDsPreview` on the right, which the Homebrew detail pages use too); `MissingGamePage` for games not in the folder |
-| My 3DS | `console_view.py` | `DevicesPage` (a card per console) → `ConsoleWindow` pages: Overview (`MirrorPanel`), Titles (tiles, FBI-like actions), HOME Menu (`HomeGrid`) |
-| Homebrew | `homebrew_view.py` | `HomebrewPage`: Apps – *Recommended* as cards, the rest of Universal-DB as tiles by category (an app's page with cover, description, screenshots, status per 3DS; versions of installed apps read from the first 64 KiB of their .cia), News, Needed for injects |
+| Games | `app.py`, `libraryview.py` | the library (`LibraryPanel(grid=True)`) as gallery (`CardsView`, a `CardView` speaking the library's `Entry` interface, plus Table and Cover Flow; `LibraryOptions` as a panel beside it); a game's page (the former main window, laid out like `HomebrewPage`'s detail pages: hero with cover and name, status line per 3DS, install button with menu, *About the game*, *Customize*; `ThreeDsPreview` on the right, which the Homebrew detail pages use too); `MissingGamePage` for games not in the folder |
+| My 3DS | `console_view.py` | `DevicesPage` (a card per console with its model's picture; the card opens it) → `ConsoleWindow` pages: Overview (`MirrorPanel`), Titles (`CardView`, FBI-like actions), HOME Menu (`HomeGrid`) |
+| Homebrew | `homebrew_view.py` | `HomebrewPage`: Apps – every shelf (*Recommended*, then Universal-DB by category) in one `CardView`, pictures loaded by four workers for the cards on screen, updates gathered for 80 ms (an app's page with cover, description, screenshots, status per 3DS; versions of installed apps read from the first 64 KiB of their .cia), News, Needed for injects |
 | Setup | `setup_view.py` | `health.check()` as a checklist |
 
 - **`DevicesPage`** reads each online console's titles and status report in

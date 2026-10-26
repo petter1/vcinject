@@ -59,6 +59,8 @@ QLabel#cardTitle { font-weight: 600; font-size: 13px; }
 QLabel#muted { color: palette(placeholder-text); }
 QLabel#dropHint { color: palette(placeholder-text); font-size: 13px; }
 QFrame#hero { background: transparent; border: none; }
+QFrame#deviceCard { background: palette(base); border: 1px solid palette(midlight); border-radius: 10px; }
+QFrame#deviceCard:hover { border: 1px solid palette(highlight); }
 QListView#cardGrid { background: transparent; border: none; }
 QListView#cardRows { background: palette(base); border: 1px solid palette(midlight); border-radius: 8px; }
 QToolButton#viewMode { border: 1px solid transparent; border-radius: 6px; padding: 2px 7px; font-size: 15px; }
