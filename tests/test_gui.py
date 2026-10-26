@@ -20,6 +20,12 @@ def test_side_bar_switches_sections(tmp_path, monkeypatch):
     window.show()
     assert window.pages.currentIndex() == 0 and window.games.currentWidget() is window.library
     assert window.install_button.text() == "Install via QR code"     # no 3DS online
+    # the game page like the Homebrew pages: one install button, the rest in its menu
+    menu = window.install_button.menu()
+    menu.aboutToShow.emit()
+    assert [a.text() for a in menu.actions() if a.text()] == ["QR code (FBI)", "Only build the CIA"]
+    window._fill_on_3ds()
+    assert "Set up a 3DS" in window.on_3ds_label.text()                # no 3DS known yet
     window.nav["setup"].click()
     assert isinstance(window.pages.currentWidget(), SetupPage)
     assert window.nav["setup"].isChecked() and not window.nav["games"].isChecked()

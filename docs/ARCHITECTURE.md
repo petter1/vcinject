@@ -48,7 +48,7 @@ done the way they are. User documentation is in the [README](../README.md).
 
 | Section | Module | Notes |
 | --- | --- | --- |
-| Games | `app.py`, `libraryview.py` | the library (`LibraryPanel(grid=True)`) as gallery; a game's page (the former main window: drop zone, *On your 3DS*, *About the game*, *Customize*, preview, Install); `MissingGamePage` for games not in the folder |
+| Games | `app.py`, `libraryview.py` | the library (`LibraryPanel(grid=True)`) as gallery; a game's page (the former main window, laid out like `HomebrewPage`'s detail pages: hero with cover and name, status line per 3DS, install button with menu, *About the game*, *Customize*; `ThreeDsPreview` on the right, which the Homebrew detail pages use too); `MissingGamePage` for games not in the folder |
 | My 3DS | `console_view.py` | `DevicesPage` (a card per console) → `ConsoleWindow` pages: Overview (`MirrorPanel`), Titles (tiles, FBI-like actions), HOME Menu (`HomeGrid`) |
 | Homebrew | `homebrew_view.py` | `HomebrewPage`: Apps – *Recommended* as cards, the rest of Universal-DB as tiles by category (an app's page with cover, description, screenshots, status per 3DS; versions of installed apps read from the first 64 KiB of their .cia), News, Needed for injects |
 | Setup | `setup_view.py` | `health.check()` as a checklist |

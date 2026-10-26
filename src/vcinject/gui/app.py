@@ -58,6 +58,8 @@ QFrame#card { background: palette(base); border: 1px solid palette(midlight); bo
 QLabel#cardTitle { font-weight: 600; font-size: 13px; }
 QLabel#muted { color: palette(placeholder-text); }
 QLabel#dropHint { color: palette(placeholder-text); font-size: 13px; }
+QFrame#hero { background: transparent; border: none; }
+QLabel#gameTitle { font-size: 24px; font-weight: 700; }
 QPushButton#primary {
     background: palette(highlight); color: palette(highlighted-text); border: none;
     border-radius: 8px; padding: 9px 18px; font-weight: 600; font-size: 13px; }
@@ -145,8 +147,10 @@ class Task(QObject):
 # --- widgets -------------------------------------------------------------------
 
 class RomDropZone(QFrame):
-    """Card that accepts a dropped ROM and shows what was recognised."""
+    """Card that accepts a dropped ROM; once one is open, the game's head like the
+    Homebrew pages: big cover, big title, facts."""
     clicked = Signal()
+    COVER = 140
 
     def __init__(self):
         super().__init__(objectName="card")
@@ -154,7 +158,7 @@ class RomDropZone(QFrame):
         self.setCursor(Qt.PointingHandCursor)
         self.setMinimumHeight(118)
         self.cover = QLabel(alignment=Qt.AlignCenter)
-        self.cover.setFixedSize(92, 92)
+        self.cover.setFixedSize(self.COVER, self.COVER)
         self.headline = QLabel("Drop a ROM here (GBA, SNES, NES, GB/GBC, Mega Drive)",
                                objectName="dropHint")
         self.headline.setWordWrap(True)
@@ -188,25 +192,37 @@ class RomDropZone(QFrame):
         text.addStretch(1)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(16)
         layout.addWidget(self.cover)
         layout.addLayout(text, 1)
         self.set_cover(None)
 
+    def show_game(self, name: str, file_name: str):
+        """A ROM is open: no drop card any more, the game's name as the page's title."""
+        self.headline.setText(name)
+        self.headline.setToolTip(file_name)
+        for widget, style in ((self, "hero"), (self.headline, "gameTitle")):
+            widget.setObjectName(style)
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+        self.layout().setContentsMargins(0, 0, 0, 0)
+
     def set_cover(self, image: Image.Image | None, label: str = "ROM"):
+        size = self.COVER
         if image is None:
-            pix = QPixmap(92, 92)
+            pix = QPixmap(size, size)
             pix.fill(Qt.transparent)
             p = QPainter(pix)
             p.setRenderHint(QPainter.Antialiasing)
             p.setPen(QPen(self.palette().mid().color(), 2, Qt.DashLine))
-            p.drawRoundedRect(QRectF(2, 2, 88, 88), 10, 10)
+            p.drawRoundedRect(QRectF(2, 2, size - 4, size - 4), 12, 12)
             p.setPen(self.palette().mid().color())
-            p.setFont(QFont(p.font().family(), 11, QFont.Bold))
+            p.setFont(QFont(p.font().family(), 13, QFont.Bold))
             p.drawText(pix.rect(), Qt.AlignCenter, label)
             p.end()
             self.cover.setPixmap(pix)
         else:
-            self.cover.setPixmap(to_pixmap(image, 92, 92))
+            self.cover.setPixmap(to_pixmap(image, size, size))
 
     def mousePressEvent(self, event):
         self.clicked.emit()
@@ -797,15 +813,23 @@ class MainWindow(QMainWindow):
         self.build_button = QPushButton("Build CIA", objectName="secondary", clicked=self.build)
         self.build_button.setToolTip("Only build the .cia (saved next to the ROM, or where 'Save to' says)")
         self.install_target = InstallTarget()
-        self.install_button = QPushButton(objectName="primary", clicked=self.install_to_target)
+        # like the Homebrew pages: one button where 'Install to' says, the menu for the rest
+        self.install_button = QToolButton(objectName="install")
+        self.install_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.install_button.setPopupMode(QToolButton.MenuButtonPopup)
+        self.install_button.clicked.connect(self.install_to_target)
+        install_menu = QMenu(self.install_button)
+        install_menu.aboutToShow.connect(lambda: self._fill_install_menu(install_menu))
+        self.install_button.setMenu(install_menu)
         self.install_target.currentIndexChanged.connect(
             lambda: self.install_button.setText(self.install_target.action_text()))
         self.install_button.setText(self.install_target.action_text())
         self._wifi_progress.connect(self._show_wifi_progress)
         self._about_ready.connect(self._about_arrived)
         actions = QHBoxLayout()
-        actions.addWidget(self.install_button, 2)
-        actions.addWidget(self.build_button, 1)
+        actions.addWidget(self.install_button)
+        actions.addWidget(self.build_button)
+        actions.addStretch(1)
         self.build_progress = QProgressBar()  # steps of a build, shown while building
         self.build_progress.setRange(0, 100)
         self.build_progress.setVisible(False)
@@ -816,13 +840,15 @@ class MainWindow(QMainWindow):
         self.log_view.setMinimumHeight(110)
 
         # which 3DS has the game; the settings only for those who want to change them
-        self.on_3ds_card, on_3ds_layout = card("On your 3DS")
-        self.on_3ds_rows = QGridLayout()
-        self.on_3ds_rows.setColumnStretch(1, 1)
-        on_3ds_layout.addLayout(self.on_3ds_rows)
-        self.about_card, about_layout = card("About the game")
+        self.on_3ds_label = QLabel(wordWrap=True)
+        self.on_3ds_label.setTextFormat(Qt.RichText)
+        self.on_3ds_label.linkActivated.connect(lambda _link: self.show_section("setup"))
         self.about_text = QLabel(wordWrap=True, openExternalLinks=True)
         self.about_text.setTextFormat(Qt.RichText)
+        self.about_box = QWidget()
+        about_layout = QVBoxLayout(self.about_box)
+        about_layout.setContentsMargins(0, 4, 0, 4)
+        about_layout.addWidget(QLabel("<b>About the game</b>"))
         about_layout.addWidget(self.about_text)
         self.customize_button = QToolButton(text="Customize – title, artwork, advanced",
                                             objectName="disclosure", checkable=True)
@@ -840,7 +866,10 @@ class MainWindow(QMainWindow):
         ConsoleWatcher.shared().installed_changed.connect(self._fill_on_3ds)
         left = QVBoxLayout()
         left.setSpacing(12)
-        for widget in (self.drop, self.on_3ds_card, self.about_card, self.customize_button, self.customize):
+        left.addWidget(self.drop)
+        left.addWidget(self.on_3ds_label)
+        left.addLayout(actions)
+        for widget in (self.about_box, self.customize_button, self.customize):
             left.addWidget(widget)
         left.addStretch(1)
         right = QVBoxLayout()
@@ -848,7 +877,6 @@ class MainWindow(QMainWindow):
         right.addWidget(preview_card)
         self.preview_card = preview_card
         right.addLayout(out_row)
-        right.addLayout(actions)
         right.addWidget(self.build_progress)
         self.qr_panel = QrPanel()
         right.insertWidget(1, self.qr_panel)  # takes the preview's place while serving
@@ -1171,7 +1199,7 @@ class MainWindow(QMainWindow):
     def _rom_renamed(self, old: Path, new: Path):
         if self.rom_path == old:
             self.rom_path = new
-            self.drop.headline.setText(new.name)
+            self.drop.show_game(_display_title(library.plain_stem(new)), new.name)
             self.output_edit.setText(str(new.with_suffix(".cia")))
             self._show_versions(new)
 
@@ -1211,10 +1239,7 @@ class MainWindow(QMainWindow):
             widget.setVisible(system.key == "gba")
         for widget in self._gb_only:
             widget.setVisible(system.key in ("gb", "gbc"))
-        self.drop.headline.setText(path.name)
-        self.drop.headline.setObjectName("cardTitle")
-        self.drop.headline.style().unpolish(self.drop.headline)
-        self.drop.headline.style().polish(self.drop.headline)
+        self.drop.show_game(_display_title(library.plain_stem(path)), path.name)
         self._show_rom_details()
         self.drop.release.setText("Looking up release…")
         self.drop.set_cover(None, system.key.upper())
@@ -1261,6 +1286,7 @@ class MainWindow(QMainWindow):
         self.found = result
         if result.match:
             self.drop.release.setText(f"✓ {result.match.name}")
+            self.drop.headline.setText(_display_title(result.match.name))
             if self.title_edit.text() == library.plain_stem(self.rom_path)[:self.title_edit.maxLength()]:
                 self.title_edit.setText(_display_title(result.match.name))
             if result.match.method == "retrogamesnexus":
@@ -1351,12 +1377,8 @@ class MainWindow(QMainWindow):
         gui_settings().setValue("customize_open", open_)
 
     def _fill_on_3ds(self):
-        """One row per known 3DS: is the open game on it, and a button to put it there."""
+        """One line, as on the Homebrew pages: is the open game on each known 3DS."""
         from .. import installed
-        while self.on_3ds_rows.count():
-            widget = self.on_3ds_rows.takeAt(0).widget()
-            if widget:
-                widget.deleteLater()
         online = {c.key: c for c in ConsoleWatcher.shared().consoles}
         known = {c.key: c.label for c in installed.known_consoles()}
         known.update({key: c.label for key, c in online.items()})
@@ -1365,26 +1387,29 @@ class MainWindow(QMainWindow):
             sha1 = hashlib.sha1(self.rom.data).hexdigest()
             has = {c.key for c in installed.on_consoles(sha1, self.rom_path.name)}
         if not known:
-            hint = QLabel("No 3DS yet. Install vcinject Link on it to install games over Wi-Fi.",
-                          objectName="muted", wordWrap=True)
-            add = QPushButton("Set up a 3DS…", objectName="secondary",
-                              clicked=lambda: self.show_section("setup"))
-            self.on_3ds_rows.addWidget(hint, 0, 0, 1, 2)
-            self.on_3ds_rows.addWidget(add, 0, 2)
+            self.on_3ds_label.setText("<span style='color:gray'>No 3DS yet: with vcinject Link on it, "
+                                      "games install over Wi-Fi.</span> <a href='setup'>Set up a 3DS…</a>")
             return
-        for row, (key, label) in enumerate(sorted(known.items(), key=lambda kv: kv[1].lower())):
-            dot = QLabel("●")
-            dot.setStyleSheet(f"color: {'#1E9E5A' if key in online else '#9a96aa'};")
-            dot.setToolTip("online" if key in online else "not online right now")
-            state = "Installed" if key in has else "Not installed"
-            text = QLabel(f"<b>{label}</b> · <span style='color:{'#1E9E5A' if key in has else 'gray'}'>"
-                          f"{state}</span>")
-            self.on_3ds_rows.addWidget(dot, row, 0)
-            self.on_3ds_rows.addWidget(text, row, 1)
-            if key in online and self.rom is not None:
-                button = QPushButton("Reinstall" if key in has else "Install", objectName="secondary")
-                button.clicked.connect(lambda _=False, c=online[key]: self.install_over_wifi([c]))
-                self.on_3ds_rows.addWidget(button, row, 2)
+        chips = []
+        for key, label in sorted(known.items(), key=lambda kv: kv[1].lower()):
+            name = label.split(" (")[0] + ("" if key in online else " (offline)")
+            if key in has:
+                chips.append(f"<span style='color:#1E9E5A'>{name}: ✓ installed</span>")
+            else:
+                chips.append(f"<span style='color:gray'>{name}: not installed</span>")
+        self.on_3ds_label.setText(" &nbsp;·&nbsp; ".join(chips))
+
+    def _fill_install_menu(self, menu: QMenu):
+        """Every 3DS online, all of them, the QR code, or only the .cia."""
+        menu.clear()
+        consoles = ConsoleWatcher.shared().consoles
+        for console in consoles:
+            menu.addAction(f"Install on {console.label}", lambda c=console: self.install_over_wifi([c]))
+        if len(consoles) > 1:
+            menu.addAction(f"Install on all {len(consoles)}", lambda: self.install_over_wifi(list(consoles)))
+        menu.addSeparator()
+        menu.addAction("QR code (FBI)", self.install_via_qr)
+        menu.addAction("Only build the CIA", self.build)
 
     def refresh_status(self):
         self._fill_on_3ds()

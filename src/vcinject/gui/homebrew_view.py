@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QComboBox, QFram
 from .. import forwarder, homebrew, installed, status, systems
 from ..errors import InjectError
 from . import wifi_install
+from .app import ThreeDsPreview, card
 
 REQUIREMENTS_HTML = """
 <p><b>Every inject</b> needs a 3DS with <a href="https://3ds.hacks.guide">Luma3DS</a>
@@ -164,7 +165,20 @@ class HomebrewPage(QWidget):
         browse_layout.addWidget(credit)
         self.apps_stack = QStackedWidget()
         self.apps_stack.addWidget(browse)
-        self.apps_stack.addWidget(_scroll(self.detail))
+        # an app's page like a game's: what it is on the left, how it looks on the 3DS right
+        self.preview = ThreeDsPreview()
+        preview_card, preview_layout = card("Preview")
+        preview_layout.addWidget(self.preview, alignment=Qt.AlignHCenter)
+        right = QVBoxLayout()
+        right.addWidget(preview_card)
+        right.addStretch(1)
+        detail_page = QWidget()
+        columns = QHBoxLayout(detail_page)
+        columns.setContentsMargins(0, 0, 0, 0)
+        columns.setSpacing(16)
+        columns.addWidget(_scroll(self.detail), 5)
+        columns.addLayout(right, 4)
+        self.apps_stack.addWidget(detail_page)
         self.shown: str | None = None  # app on the detail page
         self._news = None
 
@@ -379,6 +393,7 @@ class HomebrewPage(QWidget):
         if pix:
             cover.setPixmap(pix)
         self.detail_layout.addWidget(cover)
+        self._show_preview(data.icon, data.cover, data.app.name)
         facts = [data.release.tag, f"licence {data.release.licence}"] if data.release else []
         if data.info.author:
             facts.insert(0, f"by {data.info.author}")
@@ -407,9 +422,10 @@ class HomebrewPage(QWidget):
     def _clear_detail(self):
         while self.detail_layout.count():
             item = self.detail_layout.takeAt(0)
-            if item.widget():
-                item.widget().setParent(None)
-                item.widget().deleteLater()
+            widget = item.widget()
+            if widget:
+                widget.setParent(None)
+                widget.deleteLater()
             elif item.layout():
                 while item.layout().count():
                     child = item.layout().takeAt(0).widget()
@@ -427,11 +443,27 @@ class HomebrewPage(QWidget):
             threading.Thread(target=lambda url=url: self._shot_loaded.emit(key, homebrew.picture(url)),
                              daemon=True).start()
 
+    def _show_preview(self, icon: bytes | None, banner: bytes | None, title: str):
+        """The app's icon in the HOME Menu and its picture on the top screen."""
+        import io
+
+        from PIL import Image
+
+        def image(data):
+            try:
+                return Image.open(io.BytesIO(data)).convert("RGBA") if data else None
+            except OSError:
+                return None
+
+        self.preview_icon = icon
+        self.preview.update_art(image(icon) or Image.new("RGBA", (48, 48), "#3D2A99"), image(banner), title)
+
     def _add_shot(self, key: str, image):
-        if key == f"cover:{self.shown}" and hasattr(self, "store_cover"):
+        if key == f"cover:{self.shown}":
             pix = _pixmap(image, QSize(520, 260), enlarge=False)
             if pix:
                 self.store_cover.setPixmap(pix)
+            self._show_preview(self.preview_icon, image, self.preview.title)
             return
         if key != self.shown or not hasattr(self, "shots"):
             return
@@ -582,6 +614,7 @@ class HomebrewPage(QWidget):
         self.detail_layout.addWidget(back, alignment=Qt.AlignLeft)
         self.store_cover = QLabel()
         self.detail_layout.addWidget(self.store_cover)
+        self._show_preview(self.store_icons.get(slug), None, app.title)
         if app.image_url:
             threading.Thread(target=lambda: self._shot_loaded.emit(f"cover:{self.shown}",
                                                                     homebrew.picture(app.image_url)),

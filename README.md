@@ -186,11 +186,12 @@ upload it.
 
 One window, four sections in the side bar:
 
-- **Games** – your collection as a cover gallery. Click a game for its page:
-  *On your 3DS* shows on which console it is installed (with *Install* per
-  console), the preview shows the HOME Menu icon and the rotating banner, and
-  the big button installs it where **Install to** (top right) says – a 3DS,
-  all of them, or a QR code for FBI. Title, artwork and the advanced settings
+- **Games** – your collection as a cover gallery; chips switch each console
+  on and off. Click a game for its page, laid out like the Homebrew pages:
+  cover and name, one line saying on which 3DS it is installed, the preview of
+  the HOME Menu icon and the rotating banner, and the big button that installs
+  it where **Install to** (top right) says – its menu offers each 3DS, all of
+  them, the QR code for FBI or only the .cia. Title, artwork and the advanced settings
   (title ID, save type, plate language, LCD ghosting, brightness) are folded
   away under *Customize*. Double-clicking a game in the gallery installs it
   right away; **Build CIA** only writes the file.
